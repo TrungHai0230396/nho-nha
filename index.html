@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f0fdfa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#042f2e" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Nhớ Nha" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="description" content="Ghi chú nhắc giờ: gõ “mai 8h gọi mẹ”, app tự hiểu và nhắc đúng giờ, cả ngày âm lịch." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- Relative on purpose: under /cai/<code>/ it resolves to the manifest that starts the installed app there (worker/pair.ts). -->
+    <link rel="manifest" href="manifest.webmanifest" vite-ignore />
+    <link rel="preload" href="/fonts/plus-jakarta-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <title>Nhớ Nha</title>
+    <!-- Blocking and last in the head on purpose: the picked colours go on before the first draw (src/lib/look.ts). -->
+    <script src="/look-boot.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

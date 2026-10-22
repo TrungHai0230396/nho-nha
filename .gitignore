@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+
+# Kept on this machine only, never published: notes for AI agents, the design
+# skill they use, and the operations notes of the live instance.
+.claude/
+CLAUDE.md
+design-system/
+VAN-HANH.md

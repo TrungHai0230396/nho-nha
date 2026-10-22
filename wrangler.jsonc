@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nho-nha",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  // The app is at PUBLIC_ORIGIN. The Worker's own address,
+  // nho-nha.<account>.workers.dev, carries the account's name: off, and its
+  // version previews too. Unset, each deploy would turn it back on. A copy
+  // with PUBLIC_ORIGIN "" needs "workers_dev": true.
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // Only these need the Worker; the app itself, its scripts and icons go
+    // straight to the static asset server and cost nothing.
+    "run_worker_first": ["/api/*", "/auth/*", "/dang-nhap", "/cai/*", "/manifest.webmanifest", "/rieng-tu"],
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nho-nha",
+      // scripts/deploy.sh writes the id of the signed-in account's own
+      // database here, making one the first time (wrangler d1 create).
+      "database_id": "e2a721e6-e221-47bd-a44a-c264a4a5a39b",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // The reminders' clock (worker/clock.ts): one Durable Object whose alarm
+  // rings at the next reminder. SQLite-backed, the kind the free plan has.
+  "durable_objects": { "bindings": [{ "name": "CLOCK", "class_name": "Clock" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Clock"] }],
+  // Off on purpose: pairing codes ride in /cai/<code>/ addresses, and the
+  // logs would keep every one. `wrangler tail` still shows the cron live.
+  "observability": { "enabled": false },
+  // Every minute, a backstop: pokes the clock (worker/clock.ts), which does the ringing.
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": {
+    // Google sign-in (worker/google.ts). The client id is public; its secret
+    // is GOOGLE_CLIENT_SECRET, put on Cloudflare by scripts/google-secret.sh.
+    // Empty or without the secret: sign-in stays off.
+    "GOOGLE_CLIENT_ID": "225517917195-e3f2v8plfe65l4k9530lam904asgi77b.apps.googleusercontent.com",
+    // Given to push services as who to contact (VAPID), and on /rieng-tu.
+    "CONTACT_EMAIL": "trunghhai@gmail.com",
+    // The app's address since 13/10/2026: the Pages front door (pages/) to
+    // this Worker. Google returns there, whichever address sign-in began
+    // on, and push services get it as the VAPID contact.
+    "PUBLIC_ORIGIN": "https://nho-nha.pages.dev",
+  },
+}

@@ -1,0 +1,11 @@
+// The Cloudflare Pages project behind https://nho-nha.pages.dev: only
+// public/_worker.js, which hands every request to the nho-nha Worker. Its
+// own config, apart from the Worker's (../wrangler.jsonc): wrangler reads
+// a Pages project's from the folder `wrangler pages deploy` runs in.
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "nho-nha",
+  "pages_build_output_dir": "./public",
+  "compatibility_date": "2026-09-01",
+  "services": [{ "binding": "APP", "service": "nho-nha" }],
+}
