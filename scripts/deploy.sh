@@ -9,6 +9,10 @@ cd "$(dirname "$0")/.."
 . scripts/chung.sh
 
 PLACEHOLDER="00000000-0000-0000-0000-000000000000"
+# The original instance's database and values, as this repo carries them: a
+# copy changes the values first (README, "Tự chạy bản của riêng bạn", step 2).
+ORIGINAL_DB="e2a721e6-e221-47bd-a44a-c264a4a5a39b"
+var() { node -e 'process.stdout.write(new RegExp(`"${process.argv[1]}":\\s*"([^"]*)"`).exec(require("fs").readFileSync("wrangler.jsonc","utf8"))?.[1]??"")' "$1"; }
 
 step "1/4 Đăng nhập Cloudflare"
 login
@@ -16,15 +20,30 @@ login
 step "2/4 Cơ sở dữ liệu"
 # The id in wrangler.jsonc must be the account's own database called nho-nha:
 # a copy of this repo deployed from another account carries someone else's.
-have="$(node -e 'process.stdout.write(/"database_id":\s*"([^"]*)"/.exec(require("fs").readFileSync("wrangler.jsonc","utf8"))?.[1]??"")')"
+have="$(var database_id)"
+original=""
+if [ "$(var PUBLIC_ORIGIN)" = "https://nho-nha.pages.dev" ] || [ "$(var CONTACT_EMAIL)" = "trunghhai@gmail.com" ]; then
+  original=1
+fi
 if ! id="$(db_id nho-nha)"; then
-  if [ "$have" = "$PLACEHOLDER" ]; then
+  # A copy that has its own values but not yet its own database id would
+  # carry on with the original's, and fail at the migrations.
+  if [ "$have" = "$PLACEHOLDER" ] || { [ -z "$original" ] && [ "$have" = "$ORIGINAL_DB" ]; }; then
     echo "Không đọc được danh sách database từ Cloudflare — chạy lại lệnh này."
     exit 1
   fi
   # Cloudflare does not always answer (error 7403); the id written there is right on every run but a fork's first.
   echo "Không đọc được danh sách database từ Cloudflare; dùng database_id trong wrangler.jsonc."
   id="$have"
+fi
+# The original's values on an account that does not hold the original's
+# database: a copy about to run as the original (its address, its email).
+# NHO_NHA_ORIGINAL=1 is for the original itself, once, after its database
+# was made again (VAN-HANH.md, "Sao lưu").
+if [ -n "$original" ] && [ "$id" != "$have" ] && [ "${NHO_NHA_ORIGINAL:-}" != 1 ]; then
+  echo "wrangler.jsonc vẫn ghi địa chỉ và email của bản gốc (PUBLIC_ORIGIN, CONTACT_EMAIL)."
+  echo "Sửa theo README, mục \"Tự chạy bản của riêng bạn\", bước 2, rồi chạy lại lệnh này."
+  exit 1
 fi
 if [ -z "$id" ]; then
   # --no-update-config: the config already has this binding, only its id is
@@ -49,30 +68,31 @@ pnpm test
 npx vite build
 
 step "4/4 Đưa lên mạng"
-log="$(mktemp)"
+out="$(mktemp)"
+trap 'rm -f "$out"' EXIT
 # The database first, then the code, never the code alone: new code on an
-# old database breaks.
-run=(sh -c 'npx wrangler d1 migrations apply nho-nha --remote && npx wrangler deploy')
-if [ -t 0 ] && [ -t 1 ]; then
-  # `script` keeps a real terminal, so wrangler can still ask its first-time
-  # questions ("apply migrations?"), while the output is saved to read the address from.
-  script -q "$log" "${run[@]}" || true
-else
-  "${run[@]}" 2>&1 | tee "$log" || true
+# old database breaks. Straight in this terminal, so wrangler can still ask
+# its first-time questions ("apply migrations?").
+if npx wrangler d1 migrations apply nho-nha --remote; then
+  # wrangler writes what it did there, a JSON object a line: the deploy's
+  # names the version it put live, and the Worker's own address if it has one.
+  WRANGLER_OUTPUT_FILE_PATH="$out" npx wrangler deploy || true
 fi
-# Success is judged by wrangler naming the version it put live, not by exit
-# codes: script(1) does not reliably pass the child's status through.
-live="$(grep -c "Current Version ID" "$log" || true)"
-url="$(grep -Eo "https://[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.workers\.dev" "$log" | head -1 || true)"
-rm -f "$log"
-if [ "$live" = 0 ]; then
+deployed="$(node -e '
+const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n").filter(Boolean);
+const d = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).reverse().find((e) => e?.type === "deploy" && e.version_id);
+const dev = (d?.targets ?? []).find((t) => { try { return new URL(t).hostname.endsWith(".workers.dev"); } catch { return false; } });
+process.stdout.write(d ? `${d.version_id} ${dev ?? ""}` : "");
+' "$out")"
+if [ -z "$deployed" ]; then
   echo
   echo "Chưa thấy bản mới được đưa lên — xem lỗi ở trên rồi chạy lại lệnh này."
   exit 1
 fi
+url="${deployed#* }"
 # PUBLIC_ORIGIN when it is set (a front door or a domain of one's own), the
 # Worker's own address otherwise, which is there only with "workers_dev": true.
-home="$(node -e 'process.stdout.write(/"PUBLIC_ORIGIN":\s*"([^"]*)"/.exec(require("fs").readFileSync("wrangler.jsonc","utf8"))?.[1]??"")')"
+home="$(var PUBLIC_ORIGIN)"
 if [ -n "$home" ]; then
   echo "App đang chạy ở: $home"
 elif [ -n "$url" ]; then
