@@ -11,6 +11,8 @@ export interface Toast {
   id: number;
   text: string;
   action?: { label: string; run(): void };
+  /** Its action takes the focus: what was focused is gone ("Xoá"), and "Hoàn tác" must be in reach. */
+  focus?: boolean;
 }
 
 let toasts: Toast[] = [];
@@ -18,18 +20,30 @@ let toastSeq = 0;
 const toastListeners = new Set<() => void>();
 const emitToasts = () => toastListeners.forEach((f) => f());
 
-/** A short message above the composer, gone in two and a half seconds (six with an action to take). */
-export function toast(text: string, action?: Toast["action"]) {
-  const t = { id: ++toastSeq, text, action };
+/** Toasts a pointer is over or the focus is in: they wait, or "Hoàn tác" goes as it is reached. */
+const held = new Set<number>();
+export const holdToast = (id: number, on: boolean) => void (on ? held.add(id) : held.delete(id));
+
+/**
+ * A short message above the composer, gone in two and a half seconds, or
+ * ten with an action to take: six were too few to reach "Hoàn tác" by
+ * keyboard or screen reader. Not while held.
+ */
+export function toast(text: string, action?: Toast["action"], opts: { focus?: boolean } = {}) {
+  const t: Toast = { id: ++toastSeq, text, action, ...(action && opts.focus ? { focus: true } : {}) };
   toasts = [...toasts.slice(-2), t];
   emitToasts();
-  setTimeout(() => dismissToast(t.id), action ? 6000 : 2500);
+  const expire = () => (held.has(t.id) ? setTimeout(expire, 1500) : dismissToast(t.id));
+  setTimeout(expire, action ? 10_000 : 2500);
 }
 
 export function dismissToast(id: number) {
   toasts = toasts.filter((t) => t.id !== id);
   emitToasts();
 }
+
+/** The toasts showing now, outside React (tests). */
+export const toastsNow = (): readonly Toast[] => toasts;
 
 export function useToasts(): Toast[] {
   return useSyncExternalStore(
@@ -44,7 +58,7 @@ export function useToasts(): Toast[] {
 /* ------------------------------------------------------------------- notes */
 
 export const store = new NotesStore({
-  persist: { load: idb.loadAll, save: idb.save, wipe: idb.wipe, drop: idb.drop },
+  persist: { load: idb.loadAll, save: idb.save, wipe: idb.wipe, drop: idb.drop, settle: idb.settle },
   transport: { sync: api.sync },
   offset: deviceOffset,
   isSignedOut: (e) => e instanceof SignedOut,

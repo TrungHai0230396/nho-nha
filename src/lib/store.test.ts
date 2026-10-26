@@ -24,6 +24,9 @@ function memoryPersist(): Persist & { notes: Map<string, Note>; meta: Map<string
     drop: async (ids) => {
       for (const id of ids) notes.delete(id);
     },
+    settle: async (entries) => {
+      for (const [k, upTo] of entries) if (typeof meta.get(k) === "number" && (meta.get(k) as number) <= upTo) meta.delete(k);
+    },
   };
 }
 
@@ -84,6 +87,57 @@ const titles = (s: NotesStore) =>
     .filter((n) => !n.deleted)
     .map((n) => n.title)
     .sort();
+
+describe("NotesStore, two windows on one phone", () => {
+  // The installed app and a Chrome tab on Android share one IndexedDB.
+  const windows = () => {
+    const persist = memoryPersist();
+    const win = () =>
+      new NotesStore({ persist, offset: () => VN_OFFSET, isSignedOut: () => false, transport: { sync: async () => Promise.reject(new Offline()) } });
+    return { persist, win };
+  };
+
+  it("keeps the changes each made offline, not only the last one's", async () => {
+    const { persist, win } = windows();
+    const [a, b] = [win(), win()];
+    await a.load();
+    await b.load();
+    await a.put(newNote(id(), "mai 8h gọi mẹ", 1, VN_OFFSET));
+    await b.put(newNote(id(), "mai 9h họp", 1, VN_OFFSET));
+    const later = win();
+    await later.load();
+    expect(later.getSnapshot().pending).toBe(2);
+    expect([...persist.meta.keys()].filter((k) => k.startsWith("outbox:"))).toHaveLength(2);
+  });
+
+  it("lets go of a change the server has only if no newer one waits", async () => {
+    const { persist } = windows();
+    persist.meta.set("outbox:x", 5);
+    await persist.settle([["outbox:x", 4]]);
+    expect(persist.meta.get("outbox:x")).toBe(5);
+    await persist.settle([["outbox:x", 5]]);
+    expect(persist.meta.has("outbox:x")).toBe(false);
+  });
+
+  it("takes an outbox kept as one list by an older version", async () => {
+    const { persist, win } = windows();
+    persist.meta.set("outbox", [["n1", 3]]);
+    const w = win();
+    await w.load();
+    expect(w.getSnapshot().pending).toBe(1);
+    expect(persist.meta.get("outbox")).toBeUndefined();
+    expect(persist.meta.get("outbox:n1")).toBe(3);
+  });
+
+  it("never wipes the phone for an answer without an id", async () => {
+    const { win } = windows();
+    const w = win();
+    await w.claim("u1");
+    await w.put(newNote(id(), "ghi chú", 1, VN_OFFSET));
+    await expect(w.claim(undefined as unknown as string)).rejects.toThrow();
+    expect(w.getSnapshot().pending).toBe(1);
+  });
+});
 
 describe("NotesStore", () => {
   it("takes the answer to an edit made on a clock that runs fast, and sends it once", async () => {

@@ -25,7 +25,19 @@ export interface Persist {
   wipe(): Promise<void>;
   /** Notes gone from this phone with nothing to tell the server: a group's, once this person is out of it. */
   drop(ids: string[]): Promise<void>;
+  /** Values that go only if still no newer than given: an outbox entry another window may have renewed. */
+  settle(entries: [key: string, upTo: number][]): Promise<void>;
 }
+
+/**
+ * Each waiting change is kept under a key of its own, not in one list: two
+ * windows of the app (the installed one and a tab, on Android) each wrote
+ * its whole list over the other's, and a change only one of them held
+ * could stay on the phone for ever, never sent.
+ */
+const OUTBOX = "outbox:";
+const outboxKey = (id: string) => `${OUTBOX}${id}`;
+const GONE = Number.MAX_SAFE_INTEGER;
 
 export interface Transport {
   sync(req: SyncRequest): Promise<SyncResponse & { rejected: string[] }>;
@@ -69,7 +81,13 @@ export class NotesStore {
     this.notes = new Map(
       notes.map((n) => [n.id, { ...n, group: n.group ?? null, by: n.by ?? null, each: n.each ?? false, ticks: n.ticks ?? [], mine: n.mine ?? null, assignee: n.assignee ?? null, watch: n.watch ?? null, watchers: n.watchers ?? [] }]),
     );
-    this.outbox = new Map((meta.get("outbox") as [string, number][] | undefined) ?? []);
+    // One list, as kept before: each under its own key from now on.
+    const listed = (meta.get("outbox") as [string, number][] | undefined) ?? [];
+    this.outbox = new Map(listed);
+    for (const [k, v] of meta) {
+      if (k.startsWith(OUTBOX) && typeof v === "number") this.outbox.set(k.slice(OUTBOX.length), Math.max(v, this.outbox.get(k.slice(OUTBOX.length)) ?? 0));
+    }
+    if (listed.length) await this.o.persist.save([], { outbox: undefined, ...Object.fromEntries(listed.map(([id, v]) => [outboxKey(id), v])) });
     this.rev = Number(meta.get("rev") ?? 0);
     this.grev = new Map((meta.get("grev") as [string, number][] | undefined) ?? []);
     // Kept before a group said whether it was muted, or who has notifications on: not muted, and nobody warned about.
@@ -86,6 +104,8 @@ export class NotesStore {
    * clean copy: one person's waiting changes must never go up as another's.
    */
   async claim(owner: string): Promise<void> {
+    // No id is no owner: claiming it would wipe this phone's notes for nobody.
+    if (typeof owner !== "string" || !owner) throw new Error("no owner to claim for");
     if (this.owner === owner) return;
     if (this.owner !== null || this.notes.size) await this.clear();
     this.owner = owner;
@@ -121,7 +141,7 @@ export class NotesStore {
     this.notes.set(n.id, n);
     this.outbox.set(n.id, n.updated);
     this.emit();
-    await this.o.persist.save([n], { outbox: [...this.outbox] });
+    await this.o.persist.save([n], { [outboxKey(n.id)]: n.updated });
   }
 
   /** Sends what waits and takes in the rest. One at a time; a call meanwhile runs once more after. */
@@ -171,6 +191,12 @@ export class NotesStore {
     const groups = res.groups ?? [];
     const answered = new Set<string>();
     const sentAt = new Map(sent.map((n) => [n.id, n.updated]));
+    // What left the outbox, and up to which version: settled on the phone only if no newer one waits there.
+    const settled: [string, number][] = [];
+    const letGo = (id: string, upTo: number) => {
+      this.outbox.delete(id);
+      settled.push([outboxKey(id), upTo]);
+    };
     for (const s of [...res.notes, ...groups.flatMap((g) => g.notes)]) {
       answered.add(s.id);
       const local = this.notes.get(s.id);
@@ -182,14 +208,14 @@ export class NotesStore {
       if (waiting !== undefined && local && local.updated > s.updated && !acked) continue;
       this.notes.set(s.id, s);
       changed.push(s);
-      if (waiting !== undefined && (s.updated >= waiting || acked)) this.outbox.delete(s.id);
+      if (waiting !== undefined && (s.updated >= waiting || acked)) letGo(s.id, waiting);
     }
     // Sent and not answered with a newer version: the server has it (or refused it for good).
     for (const n of sent) {
-      if (this.outbox.get(n.id) === n.updated && !answered.has(n.id)) this.outbox.delete(n.id);
+      if (this.outbox.get(n.id) === n.updated && !answered.has(n.id)) letGo(n.id, n.updated);
     }
     if (res.rejected.length) {
-      for (const id of res.rejected) this.outbox.delete(id);
+      for (const id of res.rejected) letGo(id, GONE);
       this.o.onRejected?.(res.rejected);
     }
     this.rev = res.rev;
@@ -204,10 +230,11 @@ export class NotesStore {
       for (const n of this.notes.values()) if (n.group !== null && !inGroups.has(n.group)) gone.push(n.id);
       for (const id of gone) {
         this.notes.delete(id);
-        this.outbox.delete(id);
+        if (this.outbox.has(id)) letGo(id, GONE);
       }
     }
-    await this.o.persist.save(changed, { rev: this.rev, outbox: [...this.outbox], grev: [...this.grev], groups: this.groups });
+    await this.o.persist.save(changed, { rev: this.rev, grev: [...this.grev], groups: this.groups });
+    await this.o.persist.settle(settled);
     if (gone.length) await this.o.persist.drop(gone);
     this.emit();
   }
