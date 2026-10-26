@@ -322,6 +322,17 @@ describe("muting a group", () => {
 });
 
 describe("a group's rings in an hour", () => {
+  it("held, drops this time's nags only: the next day rings with its own", async () => {
+    const f = await family(at(13, 8));
+    const many = Array.from({ length: GROUP_RINGS_PER_HOUR }, (_, i) => noteIn(f.id, `9h việc ${i + 1}`, at(13, 8)));
+    await sync(f.app, f.me, [...many, noteIn(f.id, "mỗi ngày 9h05 uống thuốc!", at(13, 8))]);
+    await f.cron(at(13, 9));
+    // The hour is full: 9:05 is held.
+    expect((await f.cron(at(13, 9, 5))).filter((h) => h.title === "Uống thuốc")).toEqual([]);
+    expect((await f.cron(at(14, 9, 5))).filter((h) => h.title === "Uống thuốc").length).toBeGreaterThan(0);
+    expect((await f.cron(at(14, 9, 15))).filter((h) => h.title === "Uống thuốc").length).toBeGreaterThan(0);
+  });
+
   it(`stop at ${GROUP_RINGS_PER_HOUR}: the rest of the hour is one notification, "nhắc dai" included`, async () => {
     const f = await family(at(13, 8));
     const many = Array.from({ length: GROUP_RINGS_PER_HOUR + 5 }, (_, i) => noteIn(f.id, `9h việc ${i + 1}${i === GROUP_RINGS_PER_HOUR + 4 ? "!" : ""}`, at(13, 8)));

@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import { cachedMe, store, syncSoon, toast, useNotes } from "../app/state";
 import { leftAfterTap, membersLine } from "../lib/groups";
 import { called, useNicknames } from "../lib/nicknames";
-import { addItem, doneAt, markDone, remove, removeItem, reopen, restore, roundOf, shownTime, slotsOf, snooze, snoozeOptions, stamp, tapsFor, toggleItem, togglePin, undone } from "../lib/notes";
+import { addItem, doneAt, markDone, putOffLimit, remove, removeItem, reopen, restore, roundOf, shownTime, slotsOf, snooze, snoozeOptions, stamp, tapsFor, toggleItem, togglePin, undone } from "../lib/notes";
 import { andList, clockRange, dayLabel, DOW, lunarLabel, ruleLabel, whenLabel } from "../shared/describe";
 import type { Note } from "../shared/protocol";
 import { durationAt } from "../shared/recur";
@@ -126,8 +126,11 @@ export function NoteSheet({ note, now, offset, onClose, onTag }: { note: Note; n
     return m ? called(m, nicks) : w.me ? "bạn" : w.name;
   });
   const slots = slotsOf(note.rule);
+  // A group's repeating times are on the group's clock, wherever this phone is.
+  const clock = group?.offset ?? offset;
+  const until = putOffLimit(note, now, clock);
   // "Tối nay 20:00" on a note already set for 20:00 tonight would change nothing.
-  const options = snoozeOptions(now, offset).filter((o) => note.due === null || Math.abs(o.at - note.due) >= MINUTE);
+  const options = snoozeOptions(now, offset).filter((o) => (note.due === null || Math.abs(o.at - note.due) >= MINUTE) && (until === null || o.at < until));
   const details = note.text.includes("\n") ? note.text.slice(note.text.indexOf("\n") + 1).trim() : "";
   const picked = useWhen(at !== null && at > now ? at : now + 60 * MINUTE, offset);
 
@@ -145,8 +148,8 @@ export function NoteSheet({ note, now, offset, onClose, onTag }: { note: Note; n
     onClose();
   };
   const done = () => {
-    const n = markDone(note, Date.now(), offset);
-    const then = n.rule ? shownTime(n, Date.now(), offset) : null;
+    const n = markDone(note, Date.now(), clock);
+    const then = n.rule ? shownTime(n, Date.now(), clock) : null;
     const left = group ? leftAfterTap(n, group.members, offset, nicks) : null;
     void act(n, left ? `Xong. ${left}.` : then !== null ? `Xong. Lần tới: ${whenLabel(then, Date.now(), offset)}` : "Xong", note);
   };
@@ -156,6 +159,7 @@ export function NoteSheet({ note, now, offset, onClose, onTag }: { note: Note; n
     const t = picked.at();
     if (t === null) return toast("Chọn giờ trước đã.");
     if (t <= Date.now()) return toast("Chọn một lúc chưa tới.");
+    if (until !== null && t >= until) return toast(`Chọn trước lần nhắc tới (${whenLabel(until, Date.now(), offset)}).`);
     void act(snooze(note, t, Date.now()), `Lần này dời sang ${whenLabel(t, Date.now(), offset)}`, note);
   };
   const addThing = () => {

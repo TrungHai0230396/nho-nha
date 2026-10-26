@@ -55,13 +55,13 @@ async function phones() {
 }
 
 /** Two people, one phone each: Hải (who makes the group) and Lan, through the same Worker. */
-async function twoPeople() {
+async function twoPeople(lanOffset = VN_OFFSET) {
   const app = testApp();
-  const phoneOf = (cookie: string) => {
+  const phoneOf = (cookie: string, offset = VN_OFFSET) => {
     const persist = memoryPersist();
     const store = new NotesStore({
       persist,
-      offset: () => VN_OFFSET,
+      offset: () => offset,
       now: () => app.clock.now,
       isSignedOut: () => false,
       transport: { sync: async (req) => (await app.post("/api/sync", req, cookie)).json() },
@@ -69,7 +69,7 @@ async function twoPeople() {
     return { store, persist, cookie };
   };
   const hai = phoneOf(await app.signIn("fake-a"));
-  const lan = phoneOf(await app.signIn("fake-b"));
+  const lan = phoneOf(await app.signIn("fake-b"), lanOffset);
   const { id: group } = (await (await app.post("/api/groups/create", { name: "Gia đình", me: "Hải" }, hai.cookie)).json()) as { id: string };
   await hai.store.sync();
   const code = hai.store.getSnapshot().groups[0]!.code;
@@ -86,6 +86,31 @@ const titles = (s: NotesStore) =>
     .sort();
 
 describe("NotesStore", () => {
+  it("takes the answer to an edit made on a clock that runs fast, and sends it once", async () => {
+    const { app, a } = await phones();
+    let calls = 0;
+    const post = app.post;
+    // The server's clock moves on between requests, as it does: each clamp is a little later.
+    app.post = (...args) => {
+      calls++;
+      app.clock.now += 1000;
+      return post(...args);
+    };
+    // Five minutes ahead: the server clamps it to a minute (worker/notes.ts) and answers with that.
+    await a.store.put(newNote(id(), "mai 8h gọi mẹ", app.clock.now + 5 * 60_000, VN_OFFSET));
+    await a.store.sync();
+    expect(calls).toBeLessThanOrEqual(2);
+    expect(a.store.getSnapshot().pending).toBe(0);
+  });
+
+  it("keeps a group on its maker's clock when a member abroad syncs", async () => {
+    const { app, lan, group } = await twoPeople(-420);
+    await lan.store.put({ ...newNote(id(), "mỗi ngày 21h bố uống thuốc", app.clock.now, -420), group });
+    await lan.store.sync();
+    expect(app.sql.db.prepare("SELECT tz_offset FROM groups WHERE id = ?").get(group)).toEqual({ tz_offset: 420 });
+    expect(lan.store.getSnapshot().groups[0]!.offset).toBe(420);
+  });
+
   it("carries a note from one phone to the other", async () => {
     const { app, a, b } = await phones();
     await a.store.put(newNote(id(), "mai 8h gọi mẹ", app.clock.now, VN_OFFSET));

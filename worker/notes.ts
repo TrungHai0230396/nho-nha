@@ -186,7 +186,8 @@ const GROUP_WATCH_SQL = `UPDATE notes SET
   WHERE notes.user_id = json_extract(j.value, '$.owner') AND notes.id = json_extract(j.value, '$.id')
     AND EXISTS (SELECT 1 FROM group_members m WHERE m.group_id = notes.user_id AND m.user_id = ?1)
     AND json_extract(j.value, '$.t') > COALESCE(json_extract(notes.watch, '$."' || ?1 || '".t'), 0)`;
-const GROUP_BUMP_SQL = `UPDATE groups SET rev = rev + json_extract(j.value, '$.n'), tz_offset = ?3
+// The group's clock stays its own: following whoever synced last, one member abroad moved everyone's times.
+const GROUP_BUMP_SQL = `UPDATE groups SET rev = rev + json_extract(j.value, '$.n'), tz_offset = COALESCE(tz_offset, ?3)
   FROM json_each(?2) AS j
   WHERE groups.id = json_extract(j.value, '$.g') AND EXISTS (SELECT 1 FROM group_members m WHERE m.group_id = groups.id AND m.user_id = ?1)`;
 // Every group's changes past the phone's cursor for it, at most a pull's worth each.
@@ -314,7 +315,7 @@ export async function handleSync(req: Request, sql: UserSql, now: number, planne
     counts.set(c.group!, k);
     const g = groups.get(c.group!);
     const by = c.by ? { by_name: String(g?.my_name ?? ""), by_at: c.by.at, by_key: String(g?.my_key ?? "") } : { by_name: null, by_at: null, by_key: null };
-    return { ...rowFor(c, now, offset), owner: c.group, k, each: c.each ? 1 : 0, assignee: c.assignee, ...by };
+    return { ...rowFor(c, now, Number(g?.tz_offset ?? offset)), owner: c.group, k, each: c.each ? 1 : 0, assignee: c.assignee, ...by };
   });
   // Each person's own tick, and own "báo cho tôi", after the notes they belong to have gone in.
   const own = (pick: (c: Note) => Record<string, unknown> | null) =>

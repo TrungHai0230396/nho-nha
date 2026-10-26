@@ -58,7 +58,7 @@ export function Main({ me, onSignedOut, onLeave, onMe, onEnter }: { me: Me; onSi
   const [invite, setInvite] = useState(pendingInvite);
   const searchBox = useRef<HTMLInputElement>(null);
   const google = useGoogleOn();
-  const groupOf = useMemo(() => new Map(snap.groups.map((g) => [g.id, { name: g.name, members: g.members }])), [snap.groups]);
+  const groupOf = useMemo(() => new Map(snap.groups.map((g) => [g.id, { name: g.name, members: g.members, offset: g.offset }])), [snap.groups]);
 
   useEffect(() => startAutoSync(), []);
   useEffect(() => {
@@ -125,12 +125,14 @@ export function Main({ me, onSignedOut, onLeave, onMe, onEnter }: { me: Me; onSi
       const n = store.get(id);
       if (!n) return;
       const at = Date.now();
-      const next = doneAt(n) !== null ? reopen(n, at) : markDone(n, at, offset);
+      // A group's repeating times are on the group's clock, wherever this phone is.
+      const clock = (n.group ? groupOf.get(n.group)?.offset : undefined) ?? offset;
+      const next = doneAt(n) !== null ? reopen(n, at) : markDone(n, at, clock);
       await store.put(next);
       syncSoon();
       if (doneAt(n) !== null) return;
       const undo = () => void store.put(undone(n, store.get(id), Date.now())).then(syncSoon);
-      const then = next.rule ? shownTime(next, at, offset) : null;
+      const then = next.rule ? shownTime(next, at, clock) : null;
       // Each ticking for themselves: what the tap leaves, who is still to (lib/groups leftAfterTap).
       const members = next.group ? groupOf.get(next.group)?.members : undefined;
       const left = members ? leftAfterTap(next, members, offset, nicks) : null;
@@ -147,9 +149,12 @@ export function Main({ me, onSignedOut, onLeave, onMe, onEnter }: { me: Me; onSi
       return () => clearTimeout(t);
     }
     setXong(null);
-    if (doneAt(n) !== null) toast("Đã xong rồi");
+    // A repeating one already moved past the time that rang (ticked off on another phone, or by
+    // someone else in its group): another Xong would tick off its next time too.
+    const shown = n.rule ? shownTime(n, Date.now(), groupOf.get(n.group ?? "")?.offset ?? offset) : null;
+    if (doneAt(n) !== null || (shown !== null && shown > Date.now())) toast("Đã xong rồi");
     else void tick(n.id);
-  }, [xong, snap.notes, tick]);
+  }, [xong, snap.notes, tick, groupOf, offset]);
 
   const item = useCallback(async (id: string, i: number) => {
     const n = store.get(id);

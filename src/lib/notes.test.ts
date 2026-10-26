@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fromWall, VN_OFFSET } from "../shared/wall";
 import type { Note } from "../shared/protocol";
-import { addItem, applyEdit, doneAt, dropReminder, editText, lastRound, markDone, matches, newNote, nextDue, plainNote, remove, removeItem, reschedule, retime, retitle, ruleOf, schedulePhrase, sections, shownTime, slotsOf, snooze, snoozeOptions, tagsInUse, ticksFor, toggleItem, undone } from "./notes";
+import { addItem, applyEdit, doneAt, dropReminder, editText, lastRound, markDone, matches, newNote, nextDue, plainNote, putOffLimit, remove, removeItem, reschedule, retime, retitle, ruleOf, schedulePhrase, sections, shownTime, slotsOf, snooze, snoozeOptions, tagsInUse, ticksFor, toggleItem, undone } from "./notes";
 
 const at = (y: number, mo: number, d: number, h = 0, mi = 0) => fromWall(y, mo, d, h, mi, VN_OFFSET);
 const NOW = at(2026, 10, 12, 10, 30);
@@ -171,6 +171,14 @@ describe("actions", () => {
   it("offers ways to put off that still lie ahead", () => {
     expect(snoozeOptions(at(2026, 10, 12, 10, 30), VN_OFFSET).map((o) => o.label)).toEqual(["10 phút", "1 giờ", "Tối nay 20:00", "Sáng mai 8:00"]);
     expect(snoozeOptions(at(2026, 10, 12, 19, 30), VN_OFFSET).map((o) => o.label)).toEqual(["10 phút", "1 giờ", "3 giờ", "Sáng mai 8:00"]);
+    // Tapped at 0:30, "sáng mai" is the morning to come, not the one after.
+    expect(snoozeOptions(at(2026, 10, 13, 0, 30), VN_OFFSET).at(-1)!.at).toBe(at(2026, 10, 13, 8, 0));
+  });
+
+  it("puts off one time of a repeating note no further than the next time", () => {
+    const n = newNote("pills", "9h, 18h hằng ngày uống thuốc", at(2026, 10, 12, 7, 0), VN_OFFSET);
+    expect(putOffLimit(n, at(2026, 10, 12, 9, 5), VN_OFFSET)).toBe(at(2026, 10, 12, 18, 0));
+    expect(putOffLimit(newNote("once", "mai 8h gọi mẹ", at(2026, 10, 12, 7, 0), VN_OFFSET), at(2026, 10, 12, 9, 5), VN_OFFSET)).toBeNull();
     expect(snoozeOptions(at(2026, 10, 12, 19, 30), VN_OFFSET)[3]!.at).toBe(at(2026, 10, 13, 8, 0));
   });
 });

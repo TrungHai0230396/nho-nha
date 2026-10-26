@@ -170,15 +170,19 @@ export class NotesStore {
     const changed: Note[] = [];
     const groups = res.groups ?? [];
     const answered = new Set<string>();
+    const sentAt = new Map(sent.map((n) => [n.id, n.updated]));
     for (const s of [...res.notes, ...groups.flatMap((g) => g.notes)]) {
       answered.add(s.id);
       const local = this.notes.get(s.id);
       const waiting = this.outbox.get(s.id);
+      // The very version sent, back with an earlier time: the server clamps a clock that runs
+      // ahead (worker/notes.ts). That is its answer to it, or it would go again, 50 times a sync.
+      const acked = waiting !== undefined && sentAt.get(s.id) === waiting;
       // Edited here again since: ours is newer, and still to go.
-      if (waiting !== undefined && local && local.updated > s.updated) continue;
+      if (waiting !== undefined && local && local.updated > s.updated && !acked) continue;
       this.notes.set(s.id, s);
       changed.push(s);
-      if (waiting !== undefined && s.updated >= waiting) this.outbox.delete(s.id);
+      if (waiting !== undefined && (s.updated >= waiting || acked)) this.outbox.delete(s.id);
     }
     // Sent and not answered with a newer version: the server has it (or refused it for good).
     for (const n of sent) {
@@ -196,7 +200,7 @@ export class NotesStore {
     if (res.groups !== undefined) {
       const inGroups = new Set(groups.map((g) => g.id));
       this.grev = new Map(groups.map((g) => [g.id, g.rev]));
-      this.groups = groups.map(({ id, name, owner, code, muted, members }) => ({ id, name, owner, code, muted, members }));
+      this.groups = groups.map(({ id, name, owner, code, muted, members, offset }) => ({ id, name, owner, code, muted, members, offset }));
       for (const n of this.notes.values()) if (n.group !== null && !inGroups.has(n.group)) gone.push(n.id);
       for (const id of gone) {
         this.notes.delete(id);

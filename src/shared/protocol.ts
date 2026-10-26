@@ -99,6 +99,8 @@ export interface GroupInfo {
   muted: boolean;
   /** `push`: has notifications on somewhere, so a reminder for them can reach them. */
   members: { key: string; name: string; me: boolean; owner: boolean; push: boolean }[];
+  /** The group's clock, minutes east of UTC: its repeating times are on it, whoever ticks them. */
+  offset?: number;
 }
 
 /** A group's part of a sync answer: its members, and its notes changed since the phone's cursor. */

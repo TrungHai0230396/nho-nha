@@ -268,7 +268,8 @@ async function ringDue(d: CronDeps, send: SendDeps | null, budget: { left: numbe
     if (count && to.length) count.n++;
     if (message) for (const sub of phones) jobs.push({ sub, message });
     // Nobody left to ring this time (all ticked it off, or muted): on to the next, "nhắc dai" and all.
-    const next = held || !to.length ? afterPush({ rule, nag: held ? false : nag }, occ, 0, d.now, offset) : afterPush({ rule, nag }, occ, nagsLeft, d.now, offset);
+    // Held (the group's hour is full): this time's nags go, the next time keeps its own.
+    const next = afterPush({ rule, nag }, occ, held || !to.length ? 0 : nagsLeft, d.now, offset);
     // Its first ring, for one person or for each to tick: half an hour on, look whether it was done.
     const watch = group && ring === 0 && (one !== undefined || Number(r.each) === 1) ? { alert_at: occ + ALERT_AFTER_MS, alert_occ: occ } : {};
     replans.push({ user: String(r.user_id), id: String(r.id), was: Number(r.fire_at), ...next, ...watch });

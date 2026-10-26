@@ -394,6 +394,17 @@ export function undone(was: Note, cur: Note | undefined, now: number): Note {
   return out;
 }
 
+/**
+ * How far one time of a repeating note may be put off: up to its next
+ * time, not past it, or that time is lost ("9h, 18h uống thuốc" put off at
+ * 9:05 to 20:00 skipped 18:00, since the next ring follows the one put off).
+ * Null for a one-off: any time.
+ */
+export function putOffLimit(n: Note, now: number, offset: number): number | null {
+  const shown = n.rule ? shownTime(n, now, offset) : null;
+  return n.rule && shown !== null ? nextOccurrence(n.rule, Math.max(shown, now), offset) : null;
+}
+
 export const snooze = (n: Note, at: number, now: number): Note => ({ ...n, due: at, done: null, updated: stamp(n, now) });
 export const dropReminder = (n: Note, now: number): Note => ({ ...n, due: null, rule: null, nag: false, updated: stamp(n, now) });
 export const togglePin = (n: Note, now: number): Note => ({ ...n, pinned: !n.pinned, updated: stamp(n, now) });
@@ -416,7 +427,8 @@ export function snoozeOptions(now: number, offset: number): SnoozeOption[] {
   const w = toWall(now, offset);
   const round = (t: number) => Math.ceil(t / MINUTE) * MINUTE;
   const tonight = fromWall(w.y, w.mo, w.d, 20, 0, offset);
-  const morning = fromWall(w.y, w.mo, w.d + 1, 8, 0, offset);
+  // Tapped before 4:00, the night is not over: "sáng mai" is the morning to come (shared/parse LATE_HOUR).
+  const morning = fromWall(w.y, w.mo, w.d + (w.h < 4 ? 0 : 1), 8, 0, offset);
   return [
     // Under "Nhắc lại sau": "10 phút" reads as "in ten minutes"; "+10 phút" read as arithmetic.
     { label: "10 phút", at: round(now + 10 * MINUTE) },

@@ -51,7 +51,7 @@ export function cleanName(v: unknown, max: number): string | null {
 // `push`: has notifications on somewhere. A reminder given to someone who has
 // none never reaches them, and whoever watches it would hear "chưa bấm Xong"
 // every time: the app says so before that happens.
-export const MY_GROUPS_SQL = `SELECT g.id, g.name, g.owner_id = ?1 AS owner, g.rev, g.invite_v,
+export const MY_GROUPS_SQL = `SELECT g.id, g.name, g.owner_id = ?1 AS owner, g.rev, g.invite_v, g.tz_offset,
     (SELECT COUNT(*) FROM notes n WHERE n.user_id = g.id AND n.deleted = 0) AS open,
     (SELECT name FROM group_members WHERE group_id = g.id AND user_id = ?1) AS my_name,
     (SELECT key FROM group_members WHERE group_id = g.id AND user_id = ?1) AS my_key,
@@ -76,6 +76,7 @@ export async function groupInfo(r: Row, secret: string): Promise<GroupInfo> {
     owner: Number(r.owner) === 1,
     code: await inviteCode(secret, String(r.id), Number(r.invite_v)),
     muted: Number(r.my_muted) === 1,
+    offset: Number(r.tz_offset ?? 420),
     members,
   };
 }
@@ -223,8 +224,9 @@ export async function handleGroups(req: Request, path: string, sql: UserSql, now
     // Counted and made in one go: two quick taps cannot both slip under the limit.
     const [made = []] = await sql.batch([
       {
-        sql: `INSERT INTO groups (id, name, owner_id, created_at)
-              SELECT ?2, ?3, ?1, ?4 WHERE (SELECT COUNT(*) FROM group_members WHERE user_id = ?1) < ?5 RETURNING id`,
+        // On its maker's clock, for good: a sync never moves it (worker/notes.ts GROUP_BUMP_SQL).
+        sql: `INSERT INTO groups (id, name, owner_id, created_at, tz_offset)
+              SELECT ?2, ?3, ?1, ?4, COALESCE((SELECT tz_offset FROM users WHERE id = ?1), 420) WHERE (SELECT COUNT(*) FROM group_members WHERE user_id = ?1) < ?5 RETURNING id`,
         params: [id, name, now, LIMITS.groupsPerPerson],
       },
       { sql: "INSERT INTO group_members (group_id, user_id, key, name, joined_at) SELECT ?2, ?1, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM groups WHERE id = ?2 AND owner_id = ?1)", params: [id, randomToken(9), me, now] },
