@@ -359,3 +359,68 @@ describe("parse: several times, once", () => {
     for (const text of ["mai 9h họp", "9h, 18h hằng ngày uống thuốc", "mỗi thứ 2 9h và 18h họp", "2 tiếng nữa và 15h gọi", "đi chợ: trứng, sữa"]) expect(parts(text), text).toBeNull();
   });
 });
+
+// Readings that rang at the wrong time or dropped part of the line (review, 23/10/2026).
+describe("parse: days and times a line names together", () => {
+  const FRIDAY = at(2026, 10, 16, 10, 0);
+  const parts = (text: string, now = NOW) => partsOf(p(text, now), now, VN_OFFSET)!.map((x) => [show(x.parsed.due), x.parsed.title, x.parsed.rule]);
+
+  it("makes a reminder of each day of the month named", () => {
+    expect(parts("mùng 1 và rằm hằng tháng thắp hương")).toEqual([
+      ["2026-11-09 07:00", "Thắp hương", { kind: "lunarMonth", ld: 1, h: 7, mi: 0 }],
+      ["2026-10-24 07:00", "Thắp hương", { kind: "lunarMonth", ld: 15, h: 7, mi: 0 }],
+    ]);
+    expect(parts("mỗi mùng 1 và rằm thắp hương").map((x) => (x[2] as { ld: number }).ld)).toEqual([1, 15]);
+    expect(parts("ngày 1 và 15 hằng tháng đóng tiền").map((x) => (x[2] as { d: number }).d)).toEqual([1, 15]);
+    expect(parts("mùng 1, rằm thắp hương").map((x) => x[2])).toEqual([null, null]);
+    expect(p("mùng 1 và rằm hằng tháng thắp hương").title).toBe("Thắp hương");
+  });
+
+  it("adds the hours and the minutes of a time from now", () => {
+    expect([show(p("1 tiếng 30 phút nữa gọi lại").due), p("1 tiếng 30 phút nữa gọi lại").title]).toEqual(["2026-10-12 12:00", "Gọi lại"]);
+    expect(show(p("1h30 nữa gọi lại").due)).toBe("2026-10-12 12:00");
+    expect(show(p("2h15 nữa").due)).toBe("2026-10-12 12:45");
+  });
+
+  it("takes the day from 'N ngày nữa' and the time from its hour", () => {
+    expect(show(p("3 ngày nữa 9h họp").due)).toBe("2026-10-15 09:00");
+    expect(show(p("1 tuần nữa 8h khám lại").due)).toBe("2026-10-19 08:00");
+    expect(show(p("3 ngày nữa gọi lại").due)).toBe("2026-10-15 10:30");
+  });
+
+  it("reads the night words: khuya, 12h tối, the small hours after midnight", () => {
+    expect([show(p("11h khuya đi ngủ").due), p("11h khuya đi ngủ").title]).toEqual(["2026-10-12 23:00", "Đi ngủ"]);
+    expect(show(p("1h khuya").due)).toBe("2026-10-13 01:00");
+    expect(show(p("12h tối").due)).toBe("2026-10-13 00:00");
+    expect(show(p("đêm nay 2h xem bóng đá").due)).toBe("2026-10-13 02:00");
+    expect(p("mỗi thứ 7 12h đêm").rule).toEqual({ kind: "week", wd: 0, h: 0, mi: 0 });
+    expect(show(p("mỗi thứ 7 12h đêm").due)).toBe(show(p("thứ 7 12h đêm").due));
+  });
+
+  it("makes days of one week once each, not every week", () => {
+    expect(parts("thứ 4, thứ 6 tuần sau 9h họp")).toEqual([
+      ["2026-10-21 09:00", "Họp", null],
+      ["2026-10-23 09:00", "Họp", null],
+    ]);
+    expect(parts("thứ 3 và thứ 5 này đi khám").map((x) => x[0])).toEqual(["2026-10-13 08:00", "2026-10-15 08:00"]);
+    expect(p("mỗi thứ 2,4,7 học tiếng Anh").rule?.kind).toBe("weekly");
+  });
+
+  it("keeps each day with its own time", () => {
+    expect(parts("mai 8h và thứ 2 9h họp").map((x) => x[0])).toEqual(["2026-10-13 08:00", "2026-10-19 09:00"]);
+    expect(parts("mai 9h và 15h họp").map((x) => x[0])).toEqual(["2026-10-13 09:00", "2026-10-13 15:00"]);
+  });
+
+  it("rings today, not at a past 8:00 or next week, when today is named with no time", () => {
+    expect(show(p("thứ 6 tuần này nộp", FRIDAY).due)).toBe("2026-10-16 11:00");
+    expect(show(p("hôm nay nộp báo cáo").due)).toBe("2026-10-12 11:00");
+    expect(show(p("12/10 họp").due)).toBe("2026-10-12 11:00");
+  });
+
+  it("reads 'mai' typed in the small hours as the morning to come", () => {
+    const night = at(2026, 10, 13, 0, 30);
+    expect(show(p("mai 8h gọi mẹ", night).due)).toBe("2026-10-13 08:00");
+    expect(show(p("2h đêm", at(2026, 10, 13, 1, 0)).due)).toBe("2026-10-13 02:00");
+    expect(show(p("mai 8h gọi mẹ", at(2026, 10, 13, 9, 0)).due)).toBe("2026-10-14 08:00");
+  });
+});
