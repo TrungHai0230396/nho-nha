@@ -135,7 +135,8 @@ export function NoteSheet({ note, now, offset, onClose, onTag }: { note: Note; n
   const picked = useWhen(at !== null && at > now ? at : now + 60 * MINUTE, offset);
 
   // `more`: notes made beside this one (a sentence with several times); undone with it.
-  const act = async (n: Note, message: string, undo?: Note, more: Note[] = []) => {
+  // `focus`: "Hoàn tác" takes the focus, since what had it goes (a delete).
+  const act = async (n: Note, message: string, undo?: Note, more: Note[] = [], focus = false) => {
     await save(n);
     for (const m of more) await save(m);
     // The undo is an edit of its own, later than the one it undoes, or the server would keep that one.
@@ -144,7 +145,7 @@ export function NoteSheet({ note, now, offset, onClose, onTag }: { note: Note; n
       void save(undone(undo, store.get(undo.id), Date.now()));
       for (const m of more) void save(remove(store.get(m.id) ?? m, Date.now()));
     };
-    toast(message, undo ? { label: "Hoàn tác", run: back } : undefined);
+    toast(message, undo ? { label: "Hoàn tác", run: back } : undefined, { focus });
     onClose();
   };
   const done = () => {
@@ -430,7 +431,7 @@ export function NoteSheet({ note, now, offset, onClose, onTag }: { note: Note; n
           {note.pinned ? <PinOff size={20} aria-hidden="true" /> : <Pin size={20} aria-hidden="true" />}
           {note.pinned ? "Bỏ ghim" : "Ghim"}
         </button>
-        <button className="tool danger" onClick={() => void act(remove(note, Date.now()), "Đã xoá", restore(note, Date.now()))}>
+        <button className="tool danger" onClick={() => void act(remove(note, Date.now()), "Đã xoá", restore(note, Date.now()), [], true)}>
           <Trash2 size={20} aria-hidden="true" />
           Xoá
         </button>

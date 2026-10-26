@@ -37,7 +37,10 @@ function dismissed(): Set<string> {
 
 export function Main({ me, onSignedOut, onLeave, onMe, onEnter }: { me: Me; onSignedOut(): void; onLeave(): void; onMe(me: Me): void; onEnter(me: Me): void }) {
   const snap = useNotes();
-  const now = useNow();
+  const ticked = useNow();
+  // Also moved on when the app rings: a note opened from "Đến giờ rồi" showed "Sửa" for up to 30 s.
+  const [rangAt, setRangAt] = useState(0);
+  const now = Math.max(ticked, rangAt);
   const offset = deviceOffset();
   const push = usePush();
   const [query, setQuery] = useState("");
@@ -109,6 +112,7 @@ export function Main({ me, onSignedOut, onLeave, onMe, onEnter }: { me: Me; onSi
     if (wait > 86_400_000) return;
     const t = setTimeout(() => {
       if (document.visibilityState !== "visible") return;
+      setRangAt(Date.now());
       setRinging(next.note.id);
       navigator.vibrate?.([200, 100, 200]);
     }, wait + 300);
@@ -331,7 +335,6 @@ export function Main({ me, onSignedOut, onLeave, onMe, onEnter }: { me: Me; onSi
         </div>
       )}
 
-      {openNote && <NoteSheet key={openNote.id} note={openNote} now={now} offset={offset} onClose={() => setOpen(null)} onTag={(t) => setTag(t)} />}
       {settings && (
         <Settings
           start={settings}
@@ -361,6 +364,8 @@ export function Main({ me, onSignedOut, onLeave, onMe, onEnter }: { me: Me; onSi
           }}
         />
       )}
+      {/* Last, so on top: opened from a ring or a notification while another sheet is open, it was under it. */}
+      {openNote && <NoteSheet key={openNote.id} note={openNote} now={now} offset={offset} onClose={() => setOpen(null)} onTag={(t) => setTag(t)} />}
     </div>
   );
 }

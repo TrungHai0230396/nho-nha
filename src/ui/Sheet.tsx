@@ -2,6 +2,16 @@ import { ChevronLeft, Pencil, X } from "lucide-react";
 import { useEffect, useId, useRef, type ReactNode } from "react";
 
 /**
+ * Sheets open at once share one scroll lock: each saved and restored the
+ * page's overflow, so closing them out of order left the list unable to
+ * scroll until a reload.
+ */
+let lockedBy = 0;
+let pageOverflow = "";
+/** Open sheets, the last on top: only it answers Escape and keeps Tab, or one press closed both. */
+const open: object[] = [];
+
+/**
  * A sheet that rises from the bottom (a dialog in the middle on a wide
  * screen). Escape, the close button and a tap outside all close it; focus
  * moves in when it opens and back to where it was when it closes, unless
@@ -15,15 +25,19 @@ export function Sheet({ title, onClose, children, head, onTitle, onBack }: { tit
   close.current = onClose;
 
   useEffect(() => {
+    const me = {};
+    open.push(me);
     const node = ref.current;
     const before = document.activeElement as HTMLElement | null;
     const first = ref.current?.querySelector<HTMLElement>("[data-autofocus]") ?? ref.current?.querySelector<HTMLElement>("button, [href], input, select, textarea");
     first?.focus({ preventScroll: true });
     const key = (e: KeyboardEvent) => {
+      if (open.at(-1) !== me) return;
       if (e.key === "Escape") close.current();
       if (e.key !== "Tab" || !ref.current) return;
-      // Focus stays inside while it is open.
-      const all = [...ref.current.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input, select, textarea")];
+      // Focus stays inside while it is open: among what can be seen, or a field inside a closed
+      // <details> was the last stop and Tab went on behind the backdrop.
+      const all = [...ref.current.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input, select, textarea, summary")].filter((el) => el.getClientRects().length > 0);
       if (!all.length) return;
       const [a, z] = [all[0]!, all.at(-1)!];
       if (e.shiftKey && document.activeElement === a) {
@@ -35,11 +49,14 @@ export function Sheet({ title, onClose, children, head, onTitle, onBack }: { tit
       }
     };
     document.addEventListener("keydown", key);
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    if (lockedBy++ === 0) {
+      pageOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
     return () => {
+      open.splice(open.indexOf(me), 1);
       document.removeEventListener("keydown", key);
-      document.body.style.overflow = overflow;
+      if (--lockedBy === 0) document.body.style.overflow = pageOverflow;
       const now = document.activeElement;
       if (!now || now === document.body || node?.contains(now)) before?.focus?.({ preventScroll: true });
     };
