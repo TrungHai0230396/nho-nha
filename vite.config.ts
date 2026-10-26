@@ -31,11 +31,12 @@ function offlineShell(): Plugin {
       writeFileSync(
         join(outDir, "_headers"),
         [
+          // Every path: the single-page fallback serves the app at any of them.
           "/*",
           "  Referrer-Policy: no-referrer",
           "  X-Content-Type-Options: nosniff",
-          "/",
           `  Content-Security-Policy: ${CSP}`,
+          "/",
           "  Cache-Control: no-cache",
           "/sw.js",
           "  Cache-Control: no-cache",
@@ -71,5 +72,7 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
+    // The notices of what is bundled (React, lucide-react): MIT and ISC ask for them in every copy.
+    license: { fileName: "licenses.txt" },
   },
 });

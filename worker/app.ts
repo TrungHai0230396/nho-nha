@@ -3,7 +3,7 @@ import { GUEST_LIMITS, handleGuest } from "./guest";
 import { handleCapture, handleTokens } from "./capture";
 import { CSP } from "./csp";
 import { handleDevice, type DEVICE_LIMITS } from "./devices";
-import { handleSignIn, START_PATH, type Google, type Limits } from "./google";
+import { handleSignIn, LOOPBACK, START_PATH, type Google, type Limits } from "./google";
 import { handleGroups, handleInvite, notifyJoined } from "./groups";
 import { json } from "./http";
 import { handleSync } from "./notes";
@@ -46,10 +46,12 @@ export async function route(req: Request, deps: Deps): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const now = deps.now();
-  // Keys the hash of a visitor's address in the rate-limit counters. A key
-  // anyone could read would let the counters be reversed into addresses
-  // (IPv4 is small), so a secret: the push key, there from the first deploy.
-  const keyed = deps.vapidKey ?? deps.google?.clientSecret ?? "nho-nha-local";
+  // Keys the hash of a visitor's address in the rate-limit counters, and the
+  // invites' HMAC. A key anyone could read would let the counters be
+  // reversed into addresses (IPv4 is small) and invites be forged, so a
+  // secret: the push key, there from the first deploy. A stand-in only on
+  // this machine; anywhere else, without a secret, nothing below answers.
+  const keyed = deps.vapidKey || deps.google?.clientSecret || (LOOPBACK.has(url.hostname) ? "nho-nha-local" : "");
 
   if (path === START_PATH || path.startsWith("/auth/")) {
     const res = await handleSignIn(req, url, { sql: deps.sql, now: deps.now, fetch: deps.fetch, authLimits: deps.authLimits }, deps.google ?? null);
@@ -70,6 +72,7 @@ export async function route(req: Request, deps: Deps): Promise<Response> {
   }
 
   if (!path.startsWith("/api/")) return deps.assets.fetch(req);
+  if (!keyed) return harden(json({ error: "no VAPID_KEY: run scripts/deploy.sh again" }, 503));
 
   // Not signed in yet, by design: a shortcut's token, a pairing code, and "Dùng ngay".
   if (path === "/api/capture") return harden(woke(await handleCapture(req, deps.sql, now), deps));
@@ -162,9 +165,14 @@ function privacy(contact: string | undefined): Response {
       // worker/devices.ts: what is kept, and only that, and for how long.
       "Để đếm số máy đã cài app, ngày nào mở app thì máy bạn gửi một lần: một mã ngẫu nhiên của riêng máy, loại máy (iPhone, Android, máy tính…) và app đang chạy từ màn hình chính hay trong trình duyệt. Máy chủ chỉ giữ chừng đó cùng ngày gửi, không gắn với tài khoản hay ghi chú nào, và xoá sau 90 ngày máy không mở app.",
       "Muốn xoá hết: vào Cài đặt, chọn Xoá tài khoản. Mọi ghi chú, máy đã đăng nhập và phím tắt bị xoá ngay, không lấy lại được.",
+      // Time Travel (D1, 7 days) and scripts/sao-luu.sh (8 copies, weekly).
+      "Để phòng sự cố, cơ sở dữ liệu có lịch sử 7 ngày do Cloudflare giữ, và có thể có bản sao lưu đã mã hoá giữ tối đa 8 tuần. Những gì đã xoá còn trong đó tới khi hết hạn, rồi mất hẳn.",
       ...(contact ? [`Liên hệ: ${contact}`] : []),
     ],
-    buttons: [{ href: "/", label: "Về app" }],
+    buttons: [
+      { href: "/", label: "Về app" },
+      { href: "/licenses.txt", label: "Giấy phép thư viện" },
+    ],
   });
 }
 
