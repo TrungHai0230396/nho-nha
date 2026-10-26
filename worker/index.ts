@@ -2,6 +2,7 @@ import { route } from "./app";
 import type { ClockEnv } from "./clock";
 import { d1Sql } from "./d1";
 import { googleConfig, type GoogleEnv } from "./google";
+import { heartbeat } from "./heartbeat";
 
 // The Durable Object's class, for the runtime (wrangler.jsonc "durable_objects").
 export { Clock } from "./clock";
@@ -11,6 +12,8 @@ interface Env extends GoogleEnv, ClockEnv {
   CLOCK: DurableObjectNamespace<import("./clock").Clock>;
   /** .dev.vars only: a fake push service to test against. */
   PUSH_TEST_ORIGIN?: string;
+  /** Optional secret: a healthchecks.io ping URL, told every ten minutes that reminders are kept (worker/heartbeat.ts). */
+  HEARTBEAT_URL?: string;
 }
 
 /** The one instance: two clocks would ring the same reminder twice. */
@@ -46,7 +49,9 @@ export default {
     });
   },
   // Every minute, if Cloudflare runs it: a backstop that makes sure the clock's alarm is set.
-  scheduled(_event, env, ctx) {
+  scheduled(event, env, ctx) {
     ctx.waitUntil(clock(env).wake().catch((e: unknown) => console.error("nho-nha: wake failed", String(e))));
+    const url = env.HEARTBEAT_URL?.trim();
+    if (url && new Date(event.scheduledTime).getUTCMinutes() % 10 === 0) ctx.waitUntil(heartbeat(url, d1Sql(env.DB), event.scheduledTime));
   },
 } satisfies ExportedHandler<Env>;
