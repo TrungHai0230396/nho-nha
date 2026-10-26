@@ -13,16 +13,25 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(path: string, body?: unknown, credentials: RequestCredentials = "same-origin"): Promise<T> {
+async function call<T>(path: string, body?: unknown, credentials: RequestCredentials = "same-origin", timeout = 15_000): Promise<T> {
   const res = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
     credentials,
     headers: body === undefined ? undefined : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
+    // Stuck on a bad link, a request fails rather than hold up the app, and every sync after it.
+    signal: typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(timeout) : undefined,
   });
   if (res.status === 401) throw new SignedOut();
-  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  let data: { error?: string };
+  try {
+    data = (await res.json()) as { error?: string };
+  } catch {
+    // A success that cannot be read is no answer: taken as {}, "me" had no id and the phone's notes were wiped.
+    if (res.ok) throw new ApiError(res.status, "unreadable");
+    data = {};
+  }
   if (!res.ok) throw new ApiError(res.status, data.error ?? "");
   return data as T;
 }
@@ -32,7 +41,8 @@ export const api = {
   config: () => call<{ google: boolean }>("/api/config"),
   /** "Dùng ngay": an account of this device, no sign-in. */
   guest: () => call<Me>("/api/guest", {}),
-  sync: (req: SyncRequest) => call<SyncResponse & { rejected: string[] }>("/api/sync", req),
+  // Longer: a first sync can carry a lot.
+  sync: (req: SyncRequest) => call<SyncResponse & { rejected: string[] }>("/api/sync", req, "same-origin", 30_000),
   /** Either or both: the morning list's hour, the hours of sleep. */
   settings: (s: { digestHour?: number | null; quiet?: Me["quiet"] }) => call<{ ok: true }>("/api/settings", s),
   logout: (endpoint: string | null) => call<{ ok: true }>("/api/logout", { endpoint }),

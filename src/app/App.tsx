@@ -61,6 +61,11 @@ export function App() {
     void (async () => {
       const owner = await store.load().catch(() => null);
       const code = installCode();
+      // This phone's own notes are here already: shown at once, while the server says who this is.
+      // A launch waited for that answer, all of it on a slow link, with the notes on the phone.
+      const cached = cachedMe();
+      const early = !code && owner !== null && cached?.id === owner;
+      if (early && cached && live) setPhase({ kind: "main", me: cached });
       try {
         const me = await api.me();
         // Signed in here, a code in the address is not spent: it may be anyone's link, and would
@@ -75,6 +80,7 @@ export function App() {
       } catch (e) {
         if (!live) return;
         if (!(e instanceof SignedOut)) {
+          if (early) return;
           // No signal: open what this phone already has.
           const me = cachedMe();
           if (me && me.id === owner) setPhase({ kind: "main", me });

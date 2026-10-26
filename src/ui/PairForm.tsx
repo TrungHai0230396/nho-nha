@@ -1,5 +1,6 @@
 import { KeyRound } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
+import { store } from "../app/state";
 import { api, ApiError } from "../lib/api";
 import { isStandalone } from "../lib/pwa";
 import type { Me } from "../shared/protocol";
@@ -20,6 +21,12 @@ export function PairForm({ onPaired, guestNotes = false }: { onPaired(me: Me): v
     setBusy(true);
     setError(null);
     try {
+      // A guest's changes still on this phone go up first: the account this pairs into gets the
+      // guest's notes from the server, and this phone's copy is wiped for it (app/account.ts too).
+      if (guestNotes) {
+        await store.sync();
+        if (store.getSnapshot().pending > 0) return setError("Còn ghi chú chưa gửi lên được. Có mạng rồi thử lại.");
+      }
       await api.pairRedeem(code.trim(), isStandalone());
       onPaired(await api.me());
     } catch (err) {
