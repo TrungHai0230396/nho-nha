@@ -18,11 +18,21 @@ import { newSession, SESSION_IDLE_MS, sessionCookie } from "./session";
 import type { Sql } from "./sql";
 
 /**
- * New guests per address per ten minutes, and everyone's together. Loose
- * per address: mobile carriers put thousands of phones behind one IPv4.
+ * New guests per address per ten minutes, and everyone's together. Not
+ * tight per address: mobile carriers put thousands of phones behind one
+ * IPv4. Everyone's at most 4,320 a day, about 43,000 D1 writes: under the
+ * free plan's 100,000 (it was 144,000 guests).
  */
-export const GUEST_LIMITS = { perClient: 30, all: 1_000 };
+export const GUEST_LIMITS = { perClient: 10, all: 30 };
 const WINDOW_MS = 10 * MINUTE;
+
+/** ?1 the address's counter, ?2 the window, ?3 and ?4 the limits, ?5 everyone's counter. Shared with worker/pair.ts. */
+export const COUNT_CLIENT_SQL = `INSERT INTO counters (kind, win, n) SELECT ?1, ?2, 1
+    WHERE COALESCE((SELECT n FROM counters WHERE kind = ?5 AND win = ?2), 0) <= ?4
+  ON CONFLICT (kind, win) DO UPDATE SET n = n + 1 WHERE counters.n <= ?3`;
+export const COUNT_ALL_SQL = `INSERT INTO counters (kind, win, n) SELECT ?5, ?2, 1
+    WHERE COALESCE((SELECT n FROM counters WHERE kind = ?1 AND win = ?2), 0) <= ?3
+  ON CONFLICT (kind, win) DO UPDATE SET n = n + 1 WHERE counters.n <= ?4`;
 const DIGEST_HOUR = 7;
 
 export interface GuestDeps {
@@ -44,8 +54,9 @@ export async function handleGuest(req: Request, url: URL, d: GuestDeps): Promise
   // Counted and created in one transaction: two racing past a separate check cannot both get in.
   const [, , , made = []] = await d.sql.batch([
     { sql: "DELETE FROM counters WHERE win < ?1", params: [win - 1] },
-    { sql: "INSERT INTO counters (kind, win, n) VALUES (?1, ?2, 1) ON CONFLICT (kind, win) DO UPDATE SET n = n + 1", params: [client, win] },
-    { sql: "INSERT INTO counters (kind, win, n) VALUES ('guest', ?1, 1) ON CONFLICT (kind, win) DO UPDATE SET n = n + 1", params: [win] },
+    // Past either limit, nothing more is written (as worker/devices.ts): refused tries cost no writes.
+    { sql: COUNT_CLIENT_SQL, params: [client, win, limits.perClient, limits.all, "guest"] },
+    { sql: COUNT_ALL_SQL, params: [client, win, limits.perClient, limits.all, "guest"] },
     {
       sql: `INSERT INTO users (id, google_sub, guest, created_at, last_login, digest_next)
             SELECT ?1, 'guest:' || ?1, 1, ?2, ?2, ?3

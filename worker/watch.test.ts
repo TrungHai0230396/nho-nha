@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import { markDone } from "../src/lib/notes";
 import { parse } from "../src/shared/parse";
 import type { GroupSync, Me, Note, SyncResponse } from "../src/shared/protocol";
-import { fromWall, VN_OFFSET } from "../src/shared/wall";
-import { ALERT_AFTER_MS, runCron } from "./cron";
+import { DAY, fromWall, VN_OFFSET } from "../src/shared/wall";
+import { ALERT_AFTER_MS, RINGS_PER_DAY, runCron } from "./cron";
 import { GROUP_RINGS_PER_HOUR } from "./groups";
 import { adoptGuest } from "./guest";
 import { cookiePair, testApp } from "./testing/app";
@@ -318,6 +318,16 @@ describe("muting a group", () => {
     // Nothing of theirs to change: the members are as they were.
     expect(groupOf(await sync(f.app, f.lan), f.id).members).toHaveLength(3);
     expect(f.app.sql.db.prepare("SELECT COUNT(*) AS n FROM group_members WHERE muted = 1").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("a person's own rings in a day", () => {
+  it(`stop at ${RINGS_PER_DAY}: the rest wait for the next day`, async () => {
+    const f = await family(at(13, 8));
+    await sync(f.app, f.me, [noteIn(f.id, "mỗi ngày 9h uống thuốc", at(13, 8), { group: null })]);
+    f.app.sql.db.prepare("UPDATE users SET ring_day = ?, ring_n = ? WHERE id = ?").run(Math.floor(at(13, 9) / DAY), RINGS_PER_DAY, f.meId);
+    expect((await f.cron(at(13, 9))).filter((h) => h.who === "me")).toEqual([]);
+    expect((await f.cron(at(14, 9))).filter((h) => h.who === "me").map((h) => h.title)).toEqual(["Uống thuốc"]);
   });
 });
 

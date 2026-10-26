@@ -23,6 +23,7 @@ export interface ClockEnv {
 
 /** A little after the time named, never before: a run at :00.000 must find what is due at :00. */
 const SLACK_MS = 250;
+const RETRY_MS = 60_000;
 
 export class Clock extends DurableObject<ClockEnv> {
   /** Sets the alarm to the next time anything is due, if that is sooner than the one set. */
@@ -39,14 +40,20 @@ export class Clock extends DurableObject<ClockEnv> {
     // Apple refuses a VAPID contact that is not an https: or mailto: URL.
     const subject = env.PUBLIC_ORIGIN?.trim() || (env.CONTACT_EMAIL?.trim() ? `mailto:${env.CONTACT_EMAIL.trim()}` : "");
     const cap = Number(env.PUSH_CAP);
+    let failed = false;
     try {
       const vapid = subject ? await vapidFor(env.VAPID_KEY) : null;
       const r = await runCron({ sql, now: Date.now(), vapid, subject, fetch, cap: Number.isInteger(cap) && cap > 0 ? cap : undefined });
       if (r.notes || r.digests || r.alerts) console.log(`nho-nha: ${r.notes} reminders, ${r.alerts} looks at undone ones, ${r.digests} morning lists, ${r.sent} pushes`);
+    } catch (e) {
+      failed = true;
+      console.error("nho-nha: run failed", String(e));
     } finally {
-      // Whatever happened, wake again: what did not fit this run (PUSH_CAP) is already due.
+      // Whatever happened, wake again: what did not fit this run (PUSH_CAP) is already due. A run
+      // that failed (D1 out of its day's writes, say) left those rows due: a minute, not a second,
+      // or it would spin on them all day, reading.
       const now = Date.now();
-      await this.ctx.storage.setAlarm(Math.max((await nextWake(sql, now)) + SLACK_MS, now + 1_000));
+      await this.ctx.storage.setAlarm(failed ? now + RETRY_MS : Math.max((await nextWake(sql, now)) + SLACK_MS, now + 1_000));
     }
   }
 }

@@ -155,7 +155,8 @@ export function clientBucket(req: Request): string {
   return v6Prefix(ip) ?? ip;
 }
 
-// The first four groups of an IPv6 address, written out: "2001:db8:1:2::/64".
+// The first 56 bits of an IPv6 address, written out: "2001:db8:1:200::/56". A home or a
+// phone gets a /64 or a /56, often a /48: per /64, one routed /48 was 65,536 addresses.
 function v6Prefix(ip: string): string | null {
   const halves = ip.split("::");
   if (halves.length > 2) return null;
@@ -170,10 +171,11 @@ function v6Prefix(ip: string): string | null {
   if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
   const all = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill("0"), ...tail];
   if (!all.every((x) => /^[0-9a-f]{1,4}$/.test(x))) return null;
+  all[3] = `${all[3]!.padStart(4, "0").slice(0, 2)}00`;
   return `${all
     .slice(0, 4)
     .map((x) => x.replace(/^0+(?=.)/, ""))
-    .join(":")}::/64`;
+    .join(":")}::/56`;
 }
 
 // Rows older than the ten minutes go at the start of every sign-in request.

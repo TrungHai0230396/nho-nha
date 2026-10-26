@@ -44,7 +44,8 @@ export interface CronDeps {
 
 // A note is a person's or a group's (migrations/0003): whichever its owner is, by its clock.
 const DUE_SQL = `SELECT n.user_id, n.id, n.text, n.title, n.items, n.rule, n.nag, n.occ, n.nags_left, n.fire_at, n.each, n.ticks,
-    n.assignee, n.watch, COALESCE(u.tz_offset, g.tz_offset, 420) AS tz_offset, g.name AS group_name, g.ring_win, g.ring_n
+    n.assignee, n.watch, COALESCE(u.tz_offset, g.tz_offset, 420) AS tz_offset, g.name AS group_name, g.ring_win, g.ring_n,
+    u.ring_day, u.ring_n AS own_rings
   FROM notes n LEFT JOIN users u ON u.id = n.user_id LEFT JOIN groups g ON g.id = n.user_id
   WHERE n.fire_at IS NOT NULL AND n.fire_at <= ?1 ORDER BY n.fire_at LIMIT ?2`;
 const MEMBERS_SQL = `SELECT m.group_id, m.user_id, m.key, m.name, m.muted, u.tz_offset, u.quiet_from, u.quiet_to
@@ -60,6 +61,15 @@ const REPLAN_SQL = `UPDATE notes SET fire_at = json_extract(j.value, '$.fire_at'
   WHERE notes.user_id = json_extract(j.value, '$.user') AND notes.id = json_extract(j.value, '$.id')
     AND notes.fire_at = json_extract(j.value, '$.was')`;
 // Added to, not set: someone joining meanwhile counts too (worker/groups.ts notifyJoined).
+/**
+ * A person's own reminders ring at most this many times a day (UTC), far
+ * above real use: past it, held like a group's past its hour. One account's
+ * thousands of notes would otherwise spend the plan's D1 writes for all.
+ */
+export const RINGS_PER_DAY = 300;
+const OWN_RINGS_SQL = `UPDATE users SET ring_n = CASE WHEN ring_day = json_extract(j.value, '$.day') THEN ring_n + json_extract(j.value, '$.n') ELSE json_extract(j.value, '$.n') END,
+    ring_day = json_extract(j.value, '$.day')
+  FROM json_each(?1) AS j WHERE users.id = json_extract(j.value, '$.u')`;
 const RINGS_SQL = `UPDATE groups SET ring_n = CASE WHEN ring_win = json_extract(j.value, '$.win') THEN ring_n + json_extract(j.value, '$.n') ELSE json_extract(j.value, '$.n') END,
     ring_win = json_extract(j.value, '$.win')
   FROM json_each(?1) AS j WHERE groups.id = json_extract(j.value, '$.g')`;
@@ -232,6 +242,19 @@ async function ringDue(d: CronDeps, send: SendDeps | null, budget: { left: numbe
     return c;
   };
 
+  // Each person's own rings today, the same way.
+  const day = Math.floor(d.now / DAY);
+  const own = new Map<string, { was: number; n: number }>();
+  const ownOf = (r: Row) => {
+    const u = String(r.user_id);
+    let c = own.get(u);
+    if (!c) {
+      const n = Number(r.ring_day) === day ? Number(r.own_rings) : 0;
+      own.set(u, (c = { was: n, n }));
+    }
+    return c;
+  };
+
   const jobs: { sub: Sub; message: PushMessage }[] = [];
   const replans = [];
   for (const r of due) {
@@ -243,9 +266,10 @@ async function ringDue(d: CronDeps, send: SendDeps | null, budget: { left: numbe
     const ring = nag ? NAGS - nagsLeft : 0;
     const rule = r.rule === null ? null : readRule(JSON.parse(String(r.rule)));
     const offset = Number(r.tz_offset);
-    // Past the group's hour, it is held, "nhắc dai" and all; the first one held says so to everyone listening.
-    const count = group ? countOf(r) : null;
-    const held = count !== null && count.n >= GROUP_RINGS_PER_HOUR;
+    // Past the group's hour (or a person's day), it is held, "nhắc dai" and all; the first one a group
+    // holds says so to everyone listening.
+    const count = group ? countOf(r) : ownOf(r);
+    const held = count.n >= (group ? GROUP_RINGS_PER_HOUR : RINGS_PER_DAY);
     const one = group ? assigned(r, membersOf(r)) : undefined;
     let message: PushMessage | null;
     let to: string[];
@@ -253,7 +277,7 @@ async function ringDue(d: CronDeps, send: SendDeps | null, budget: { left: numbe
       const watchers = one ? watchersOf(r, membersOf(r), one).map((m) => m.name) : [];
       message = reminderMessage(r, ring, occ, rule, offset, { solo: one !== undefined, watchers });
       to = whose(r);
-    } else if (count.n === GROUP_RINGS_PER_HOUR) {
+    } else if (group && count.n === GROUP_RINGS_PER_HOUR) {
       message = floodMessage(r, d.now);
       to = listening(r).map((m) => m.user);
     } else {
@@ -265,7 +289,7 @@ async function ringDue(d: CronDeps, send: SendDeps | null, budget: { left: numbe
     if (phones.length > budget.left && replans.length) break;
     budget.left -= phones.length;
     // A ring is someone rung: everyone who ticked it off rings nobody, and does not use up the hour.
-    if (count && to.length) count.n++;
+    if (to.length) count.n++;
     if (message) for (const sub of phones) jobs.push({ sub, message });
     // Nobody left to ring this time (all ticked it off, or muted): on to the next, "nhắc dai" and all.
     // Held (the group's hour is full): this time's nags go, the next time keeps its own.
@@ -279,9 +303,11 @@ async function ringDue(d: CronDeps, send: SendDeps | null, budget: { left: numbe
   // the next run would be cut short on them again, for ever. The price is a
   // push lost now and then, which the morning list and the app's "đã qua giờ" show.
   const counted = [...rings].map(([g, c]) => ({ g, win, n: c.n - c.was })).filter((c) => c.n > 0);
+  const ownCounted = [...own].map(([u, c]) => ({ u, day, n: c.n - c.was })).filter((c) => c.n > 0);
   await d.sql.batch([
     { sql: REPLAN_SQL, params: [JSON.stringify(replans)] },
     ...(counted.length ? [{ sql: RINGS_SQL, params: [JSON.stringify(counted)] }] : []),
+    ...(ownCounted.length ? [{ sql: OWN_RINGS_SQL, params: [JSON.stringify(ownCounted)] }] : []),
   ]);
   if (!send) return { notes: replans.length, sent: 0 };
   const { sent, gone } = await sendAll(jobs, send);

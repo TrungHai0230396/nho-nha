@@ -7,7 +7,7 @@
 // push next (fire_at), which the cron (worker/cron.ts) acts on.
 import { GROUP_ID, LIMITS, readNote, tombstone, type GroupSync, type Note, type SyncResponse } from "../src/shared/protocol";
 import { nextOccurrence, readRule, type Rule } from "../src/shared/recur";
-import { MINUTE } from "../src/shared/wall";
+import { DAY, MINUTE } from "../src/shared/wall";
 import { groupInfo, MY_GROUPS_SQL } from "./groups";
 import { isObject, isOffset, json, readJson } from "./http";
 import type { Row, UserSql } from "./sql";
@@ -21,6 +21,15 @@ export const GRACE_MS = 2 * MINUTE;
 export const MAX_NOTES = 5_000;
 /** The same for a group's notes, shared by everyone in it. */
 export const MAX_GROUP_NOTES = 2_000;
+/**
+ * Per person, far above real use: notes with a time still to come, and of
+ * those "nhắc dai", and changes a day (UTC, as Cloudflare counts). Without
+ * them, one free guest with 5,000 notes ringing seven times a day each
+ * spent the plan's 100,000 D1 writes a day for everyone (23/10/2026 review).
+ */
+export const MAX_TIMED = 500;
+export const MAX_NAGGING = 50;
+export const MAX_CHANGES_PER_DAY = 2_000;
 /** A phone's clock this far ahead still counts; further, its edits would win every argument for ever. */
 const CLOCK_AHEAD_MS = MINUTE;
 
@@ -134,10 +143,14 @@ const UPSERT_SQL = `INSERT INTO notes (user_id, ${COLUMNS}, fire_at, occ, nags_l
     pinned = excluded.pinned, deleted = excluded.deleted, updated = excluded.updated, rev = excluded.rev,
     ${KEEP_PLAN}
   WHERE excluded.updated > notes.updated`;
-const BUMP_SQL = "UPDATE users SET rev = rev + ?2, tz_offset = ?3 WHERE id = ?1";
+const BUMP_SQL = "UPDATE users SET rev = rev + ?2, tz_offset = ?3, chg_n = CASE WHEN chg_day = ?4 THEN chg_n + ?5 ELSE ?5 END, chg_day = ?4 WHERE id = ?1";
 const PULL_SQL = `SELECT ${COLUMNS} FROM notes WHERE user_id = ?1 AND rev > ?2 ORDER BY rev LIMIT ?3`;
-const STATE_SQL = `SELECT u.rev, (SELECT COUNT(*) FROM notes WHERE user_id = ?1 AND deleted = 0) AS open,
-  (SELECT json_group_array(id) FROM notes WHERE user_id = ?1 AND id IN (SELECT value FROM json_each(?2))) AS known
+// `known`: the notes sent that are already here, each with 1 if it has a time still to come, +2 if "nhắc dai".
+const STATE_SQL = `SELECT u.rev, u.chg_day, u.chg_n, (SELECT COUNT(*) FROM notes WHERE user_id = ?1 AND deleted = 0) AS open,
+  (SELECT COUNT(*) FROM notes WHERE user_id = ?1 AND deleted = 0 AND due IS NOT NULL AND done IS NULL) AS timed,
+  (SELECT COUNT(*) FROM notes WHERE user_id = ?1 AND deleted = 0 AND due IS NOT NULL AND done IS NULL AND nag = 1) AS nagging,
+  (SELECT json_group_object(id, (deleted = 0 AND due IS NOT NULL AND done IS NULL) + 2 * (deleted = 0 AND due IS NOT NULL AND done IS NULL AND nag = 1))
+     FROM notes WHERE user_id = ?1 AND id IN (SELECT value FROM json_each(?2))) AS known
   FROM users u WHERE u.id = ?1`;
 
 // A group's notes go in the same way, many groups in one statement: each
@@ -201,11 +214,12 @@ const GROUP_PULL_SQL = `SELECT * FROM (
       json_extract(n.ticks, '$."' || ?1 || '"') AS mine_json,
       (SELECT json_group_array(json_object('key', m.key, 'name', m.name, 'me', m.user_id = ?1))
          FROM group_members m WHERE m.group_id = n.user_id AND json_extract(n.watch, '$."' || m.user_id || '".on') = 1) AS watch_list,
-      json_extract(n.watch, '$."' || ?1 || '"') AS watch_mine,
-      ROW_NUMBER() OVER (PARTITION BY n.user_id ORDER BY n.rev) AS k
-    FROM notes n JOIN json_each(?2) AS j ON n.user_id = json_extract(j.value, '$.g') AND n.rev > json_extract(j.value, '$.s')
+      json_extract(n.watch, '$."' || ?1 || '"') AS watch_mine
+    FROM notes n JOIN json_each(?2) AS j ON n.user_id = json_extract(j.value, '$.g')
     WHERE n.user_id IN (SELECT group_id FROM group_members WHERE user_id = ?1)
-  ) WHERE k <= ?3 ORDER BY grp, rev`;
+      -- A page from the cursor on, read as such: a window over all past it read a new phone's whole backlog every page.
+      AND n.rev IN (SELECT rev FROM notes WHERE user_id = json_extract(j.value, '$.g') AND rev > json_extract(j.value, '$.s') ORDER BY rev LIMIT ?3)
+  ) ORDER BY grp, rev`;
 const GROUP_KNOWN_SQL = `SELECT json_group_array(n.user_id || ' ' || n.id) AS known FROM notes n
   WHERE n.user_id IN (SELECT group_id FROM group_members WHERE user_id = ?1) AND n.id IN (SELECT value FROM json_each(?2))`;
 const GROUP_REVS_SQL = "SELECT id, rev FROM groups WHERE id IN (SELECT group_id FROM group_members WHERE user_id = ?1)";
@@ -278,16 +292,27 @@ export async function handleSync(req: Request, sql: UserSql, now: number, planne
   ]);
   const row = state[0];
   if (!row) return json({ error: "signed out" }, 401);
-  const known = new Set(JSON.parse(String(row.known ?? "[]")) as string[]);
+  const known = new Map(Object.entries(JSON.parse(String(row.known ?? "{}")) as Record<string, number>));
   let room = MAX_NOTES - Number(row.open);
+  let timedRoom = MAX_TIMED - Number(row.timed);
+  let nagRoom = MAX_NAGGING - Number(row.nagging);
+  const today = Math.floor(now / DAY);
+  let budget = MAX_CHANGES_PER_DAY - (Number(row.chg_day) === today ? Number(row.chg_n) : 0);
   changes = changes.filter((c) => {
-    if (known.has(c.id) || c.deleted) return true;
-    if (room > 0) {
-      room--;
-      return true;
+    const was = known.get(c.id);
+    const timed = !c.deleted && c.due !== null && c.done === null;
+    const dTimed = Number(timed) - ((was ?? 0) & 1);
+    const dNag = Number(timed && c.nag) - (((was ?? 0) & 2) >> 1);
+    const fits = (was !== undefined || c.deleted || room > 0) && (dTimed <= 0 || timedRoom > 0) && (dNag <= 0 || nagRoom > 0) && budget > 0;
+    if (!fits) {
+      rejected.push(c.id);
+      return false;
     }
-    rejected.push(c.id);
-    return false;
+    if (was === undefined && !c.deleted) room--;
+    timedRoom -= dTimed;
+    nagRoom -= dNag;
+    budget--;
+    return true;
   });
 
   // A group's change goes in only from someone in it, and while the group has room.
@@ -300,6 +325,12 @@ export async function handleSync(req: Request, sql: UserSql, now: number, planne
       rejected.push(c.id);
       return false;
     }
+    // A group's changes count toward the sender's day too.
+    if (budget <= 0) {
+      rejected.push(c.id);
+      return false;
+    }
+    budget--;
     if (knownShared.has(`${c.group} ${c.id}`) || c.deleted) return true;
     const left = groupRoom.get(c.group!) ?? 0;
     if (left > 0) {
@@ -333,7 +364,7 @@ export async function handleSync(req: Request, sql: UserSql, now: number, planne
   const batch = changes.map((c) => rowFor(c, now, offset));
   const results = await sql.batch([
     ...(batch.length ? [{ sql: UPSERT_SQL, params: [JSON.stringify(batch)] }] : []),
-    { sql: BUMP_SQL, params: [batch.length, offset] },
+    { sql: BUMP_SQL, params: [batch.length, offset, today, batch.length + groupBatch.length] },
     ...(groupBatch.length
       ? [
           { sql: GROUP_UPSERT_SQL, params: [JSON.stringify(groupBatch)] },

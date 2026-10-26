@@ -19,17 +19,23 @@ import { MINUTE, DAY } from "../src/shared/wall";
 import { randomToken, sha256Hex, hmacHex } from "./crypto";
 import { clientBucket } from "./google";
 import { isObject, json, readJson } from "./http";
-import { adoptGuest } from "./guest";
+import { adoptGuest, COUNT_ALL_SQL, COUNT_CLIENT_SQL } from "./guest";
 import { newSession, session, sessionCookie } from "./session";
 import type { Sql, UserSql } from "./sql";
 
-export const INSTALL_TTL_MS = 30 * DAY;
+/**
+ * An install code lives a day: the installed app's first launch comes
+ * minutes after its install, and `app: true` is only the client's word, so
+ * whoever holds a link to /cai/<code>/ could spend it while it lives (it was
+ * a month: 23/10/2026 review). Later, the typed 8-character code.
+ */
+export const INSTALL_TTL_MS = DAY;
 export const MANUAL_TTL_MS = 10 * MINUTE;
 /**
  * How old an install code may be when a browser, not the installed app,
- * spends it: Zalo's browser out to Safari and the old address to the new
- * make theirs a moment before opening them (src/ui/EscapeInApp.tsx keeps its
- * own for a visit, hence not a minute).
+ * spends it: Zalo's browser out to Safari makes its own a moment before
+ * opening it (src/ui/EscapeInApp.tsx keeps one for a visit, hence not a
+ * minute).
  */
 export const LINK_TTL_MS = 30 * MINUTE;
 /** Unused codes kept per person and kind; a new one past it ends the oldest. */
@@ -39,7 +45,7 @@ const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MANUAL = /^[A-HJ-NP-Z2-9]{8}$/;
 export const INSTALL = /^[A-Za-z0-9_-]{43}$/;
 /** Tries per address per ten minutes, and everyone's together. */
-export const PAIR_LIMITS = { perClient: 20, all: 2_000 };
+export const PAIR_LIMITS = { perClient: 10, all: 200 };
 const WINDOW_MS = 10 * MINUTE;
 
 function manualCode(): string {
@@ -64,7 +70,7 @@ export async function handlePairStart(req: Request, path: string, sql: UserSql, 
       sql: "INSERT INTO pair_codes (hash, user_id, kind, created_at, expires_at) VALUES (?2, ?1, ?3, ?4, ?5)",
       params: [await sha256Hex(code), kind, now, now + (install ? INSTALL_TTL_MS : MANUAL_TTL_MS)],
     },
-    // Install codes live a month, and each tap on "Cài" makes one.
+    // Install codes live a day, and each tap on "Cài" makes one.
     {
       sql: `DELETE FROM pair_codes WHERE user_id = ?1 AND kind = ?2 AND hash NOT IN
               (SELECT hash FROM pair_codes WHERE user_id = ?1 AND kind = ?2 ORDER BY created_at DESC, rowid DESC LIMIT ?3)`,
@@ -103,8 +109,8 @@ export async function handlePairRedeem(req: Request, url: URL, d: PairDeps): Pro
   // Every try counts, right or wrong: guessing is what the limit is for.
   const [, , , counts = [], used = []] = await d.sql.batch([
     { sql: "DELETE FROM counters WHERE win < ?1", params: [win - 1] },
-    { sql: "INSERT INTO counters (kind, win, n) VALUES (?1, ?2, 1) ON CONFLICT (kind, win) DO UPDATE SET n = n + 1", params: [client, win] },
-    { sql: "INSERT INTO counters (kind, win, n) VALUES ('pair', ?1, 1) ON CONFLICT (kind, win) DO UPDATE SET n = n + 1", params: [win] },
+    { sql: COUNT_CLIENT_SQL, params: [client, win, limits.perClient, limits.all, "pair"] },
+    { sql: COUNT_ALL_SQL, params: [client, win, limits.perClient, limits.all, "pair"] },
     { sql: "SELECT (SELECT n FROM counters WHERE kind = ?1 AND win = ?2) AS mine, (SELECT n FROM counters WHERE kind = 'pair' AND win = ?2) AS everyone", params: [client, win] },
     // Spent in the same statement that finds it: a second try with it, even a racing one, finds nothing.
     // Too old for a browser, it is left as it was: the installed app may still need it.
@@ -118,7 +124,8 @@ export async function handlePairRedeem(req: Request, url: URL, d: PairDeps): Pro
     },
   ]);
   const c = counts[0];
-  if (Number(c?.mine) > limits.perClient || Number(c?.everyone) > limits.all) return json({ error: "too many tries" }, 429);
+  // Not counted at all: everyone's limit was already past.
+  if (c?.mine == null || Number(c.mine) > limits.perClient || Number(c?.everyone) > limits.all) return json({ error: "too many tries" }, 429);
   const userId = used[0]?.user_id;
   if (typeof userId !== "string") return json({ error: "no such code" }, 404);
   // A guest on this device typing a code from their other phone brings their notes along. Only

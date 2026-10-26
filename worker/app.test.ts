@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "../src/shared/parse";
 import type { Note, SyncResponse } from "../src/shared/protocol";
-import { DAY, fromWall, MINUTE, VN_OFFSET } from "../src/shared/wall";
+import { DAY, fromWall, HOUR, MINUTE, VN_OFFSET } from "../src/shared/wall";
 import { CAPTURE_LIMIT, MAX_PARTS } from "./capture";
 import { runCron } from "./cron";
 import { MAX_NOTES, NAGS, NAG_GAP_MS } from "./notes";
@@ -311,7 +311,7 @@ describe("pairing a phone", () => {
     expect((await app.post("/api/pair", { code, app: true })).status).toBe(404);
   });
 
-  it("lets a browser in with an install code only while it is fresh, and the installed app for a month", async () => {
+  it("lets a browser in with an install code only while it is fresh, and the installed app for a day", async () => {
     const app = testApp();
     const safari = await app.signIn();
     const mint = async () => ((await (await app.post("/api/pair/install", {}, safari)).json()) as { code: string }).code;
@@ -321,9 +321,13 @@ describe("pairing a phone", () => {
     const posted = await mint();
     app.clock.now += LINK_TTL_MS + MINUTE;
     expect((await app.post("/api/pair", { code: posted })).status).toBe(404);
-    // …since the installed app made from that page still needs it, weeks on.
-    app.clock.now += 20 * DAY;
+    // …since the installed app made from that page still needs it, hours on.
+    app.clock.now += 20 * HOUR;
     expect((await app.post("/api/pair", { code: posted, app: true })).status).toBe(200);
+    // Not past its day: "app" is only the client's word, and a link travels.
+    const old = await mint();
+    app.clock.now += DAY + MINUTE;
+    expect((await app.post("/api/pair", { code: old, app: true })).status).toBe(404);
   });
 
   it("keeps a person's newest install codes, not every one ever asked for", async () => {
