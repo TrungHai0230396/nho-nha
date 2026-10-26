@@ -1,10 +1,11 @@
 # Shared by the scripts that act on Cloudflare; sourced, not run.
 
-# This Mac's default shell runs Node 16; wrangler needs 20 or newer.
+# This Mac's default shell runs Node 16. wrangler needs 22, and the tests
+# deploy.sh runs need 22.13 (node:sqlite without a flag).
 NODE24="$HOME/.nvm/versions/node/v24.14.1/bin"
 [ -d "$NODE24" ] && export PATH="$NODE24:$PATH"
-if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'; then
-  echo "Cần Node 20 trở lên (đang có $(node -v))."
+if ! node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 13) ? 0 : 1)'; then
+  echo "Cần Node 22.13 trở lên (đang có $(node -v))."
   exit 1
 fi
 

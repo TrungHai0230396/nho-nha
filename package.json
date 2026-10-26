@@ -2,6 +2,10 @@
   "name": "nho-nha",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.6.5",
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "build": "vite build",
     "dev": "vite build && wrangler dev",

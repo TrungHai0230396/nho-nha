@@ -34,7 +34,7 @@ Thử ngay: Cài đặt → "Thử: nhắc sau 1 phút", khoá máy, đợi.
 
 ## Tự chạy bản của riêng bạn
 
-App chạy trọn trên gói miễn phí của Cloudflare: một Worker làm máy chủ (`worker/`), cơ sở dữ liệu D1, và một Durable Object làm đồng hồ nhắc giờ. Cần Node 20 trở lên, [pnpm](https://pnpm.io) và một tài khoản Cloudflare.
+App chạy trọn trên gói miễn phí của Cloudflare: một Worker làm máy chủ (`worker/`), cơ sở dữ liệu D1, và một Durable Object làm đồng hồ nhắc giờ. Cần Node 22.13 trở lên (nên dùng 24, như trong `.nvmrc`), [pnpm](https://pnpm.io), bash (macOS, Linux, hoặc WSL trên Windows) và một tài khoản Cloudflare.
 
 1. Lấy code:
 
@@ -48,7 +48,7 @@ App chạy trọn trên gói miễn phí của Cloudflare: một Worker làm má
 
    | Biến | Đặt thành |
    |---|---|
-   | `CONTACT_EMAIL` | Email của bạn. Hiện ở trang /rieng-tu, và là địa chỉ liên hệ gửi kèm cho dịch vụ thông báo. |
+   | `CONTACT_EMAIL` | Email của bạn, hiện ở trang /rieng-tu. Khi `PUBLIC_ORIGIN` để trống, đây cũng là địa chỉ liên hệ gửi kèm cho dịch vụ thông báo (có `PUBLIC_ORIGIN` thì gửi địa chỉ đó). |
    | `PUBLIC_ORIGIN` | `""` để dùng địa chỉ `*.workers.dev` của bạn, hoặc tên miền riêng, ví dụ `"https://nhacviec.example.com"`. |
    | `GOOGLE_CLIENT_ID` | `""` cho tới khi có client của riêng bạn (xem [Đăng nhập Google](#đăng-nhập-google)). |
 
@@ -96,7 +96,7 @@ Mở bản của bạn cho người ngoài dùng thì đặt tên và icon khác
 - `worker/cron.ts`: tên mặc định của thông báo
 - `src/ui/Welcome.tsx`, `src/ui/Main.tsx`, `src/sw.js`
 
-Icon vẽ lại bằng `python3 scripts/make-icons.py`. Đổi `name` trong `wrangler.jsonc` là đổi luôn địa chỉ `*.workers.dev`.
+Icon vẽ lại bằng `python3 scripts/make-icons.py`. Đổi `name` trong `wrangler.jsonc` là đổi luôn địa chỉ `*.workers.dev`; có dùng `pages/` thì đổi cả `service` trong `pages/wrangler.jsonc` cho khớp.
 
 ## Chạy thử trên máy
 
@@ -105,7 +105,13 @@ pnpm install
 cp .dev.vars.example .dev.vars
 ```
 
-Điền `VAPID_KEY` trong `.dev.vars` bằng kết quả của hàm `new_vapid_key` trong `scripts/chung.sh`, rồi:
+Tạo khoá gửi thông báo cho máy này, rồi dán kết quả vào sau `VAPID_KEY=` trong `.dev.vars` (để trống thì "Dùng ngay" báo lỗi):
+
+```bash
+bash -c '. scripts/chung.sh && new_vapid_key'
+```
+
+Rồi:
 
 ```bash
 pnpm db:local
@@ -137,6 +143,6 @@ Code theo giấy phép [MIT](LICENSE): ai cũng được dùng, sửa, phát hà
 
 Tên "Nhớ Nha" và icon của app (`public/icons/`, `public/favicon.svg`) không nằm trong giấy phép MIT. Tự chạy cho mình, gia đình hay nhóm của mình thì cứ giữ nguyên; mở cho người ngoài dùng thì xin đặt tên và icon khác, để không ai nhầm với app gốc.
 
-Phông Plus Jakarta Sans là của tác giả phông, theo giấy phép SIL Open Font License 1.1 (`public/fonts/OFL.txt`).
+Phông Plus Jakarta Sans là của tác giả phông, theo giấy phép SIL Open Font License 1.1 (`public/fonts/OFL.txt`). Giấy phép của các thư viện đi kèm app (React, lucide-react) nằm trong `licenses.txt` của bản build, tức `/licenses.txt` trên app.
 
 The code is MIT-licensed. The name "Nhớ Nha" and the app icon are not covered by the license: keep them for a copy you run for yourself, your family or your group, but give a copy you open to others its own name and icon.
