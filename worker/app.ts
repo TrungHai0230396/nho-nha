@@ -1,4 +1,5 @@
 import { handleAccount } from "./account";
+import { nextUtcDay, WritesSpent, writesSpentMessage } from "./budget";
 import { GUEST_LIMITS, handleGuest } from "./guest";
 import { handleCapture, handleTokens } from "./capture";
 import { CSP } from "./csp";
@@ -43,6 +44,27 @@ const INSTALL_PATH = /^\/cai\/([^/]+)\/(manifest\.webmanifest)?$/;
 const PRIVACY_PATH = "/rieng-tu";
 
 export async function route(req: Request, deps: Deps): Promise<Response> {
+  try {
+    return await dispatch(req, deps);
+  } catch (e) {
+    if (e instanceof WritesSpent) return harden(outOfWrites(req, deps.now()));
+    throw e;
+  }
+}
+
+/**
+ * Out of the day's D1 writes (worker/budget.ts) until 00:00 UTC: JSON for the
+ * app and the shortcut, which shows `message` as it is; a page on the way
+ * through sign-in, the only other place that writes.
+ */
+function outOfWrites(req: Request, now: number): Response {
+  const message = writesSpentMessage(now);
+  const headers = new Headers({ "retry-after": String(Math.ceil((nextUtcDay(now) - now) / 1000)) });
+  if (new URL(req.url).pathname.startsWith("/api/")) return json({ error: "out of writes", message }, 503, headers);
+  return page({ title: "Chưa đăng nhập được", lines: [message], status: 503, buttons: [{ href: "/", label: "Về app" }], headers });
+}
+
+async function dispatch(req: Request, deps: Deps): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const now = deps.now();

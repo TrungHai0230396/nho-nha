@@ -2,6 +2,7 @@
 // kept (sessions.hash). Made by Google sign-in (worker/google.ts) or by a
 // pairing code (worker/pair.ts), for a phone that cannot use Google itself.
 import { DAY, VN_OFFSET } from "../src/shared/wall";
+import { WritesSpent } from "./budget";
 import { nextDigest } from "./cron";
 import { clearCookie, cookieName, cookieOf, setCookie } from "./cookies";
 import { randomToken, sha256Hex } from "./crypto";
@@ -57,9 +58,13 @@ export async function session(req: Request, url: URL, sql: Sql, now: number): Pr
   const token = cookieOf(req, cookieName(url, "nhonha"));
   if (!token || !TOKEN.test(token)) return null;
   const hash = await sha256Hex(token);
-  const [rows = []] = await sql.batch([
-    { sql: "UPDATE sessions SET last_used = ?2 WHERE hash = ?1 AND last_used >= ?3 RETURNING user_id", params: [hash, now, now - SESSION_IDLE_MS] },
-  ]);
+  const [rows = []] = await sql
+    .batch([{ sql: "UPDATE sessions SET last_used = ?2 WHERE hash = ?1 AND last_used >= ?3 RETURNING user_id", params: [hash, now, now - SESSION_IDLE_MS] }])
+    .catch((e: unknown) => {
+      // Out of the day's writes (worker/budget.ts): still signed in, to read, untouched until they are back.
+      if (!(e instanceof WritesSpent)) throw e;
+      return sql.batch([{ sql: "SELECT user_id FROM sessions WHERE hash = ?1 AND last_used >= ?2", params: [hash, now - SESSION_IDLE_MS] }]);
+    });
   const userId = rows[0]?.user_id;
   return typeof userId === "string" ? { userId, hash } : null;
 }

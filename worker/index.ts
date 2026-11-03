@@ -34,8 +34,12 @@ export default {
       wound = true;
       wake();
     }
-    return route(req, {
-      sql: d1Sql(env.DB),
+    // Each request metered against the day's D1 writes (worker/budget.ts). What it wrote is counted
+    // once it has answered and the work it left running is done (a group's "đã vào nhóm" push).
+    const sql = d1Sql(env.DB);
+    const after: Promise<unknown>[] = [];
+    const answer = route(req, {
+      sql,
       assets: env.ASSETS,
       now: Date.now,
       vapidKey: env.VAPID_KEY,
@@ -45,13 +49,24 @@ export default {
       wake,
       // As the clock has it (worker/clock.ts): Apple refuses a VAPID contact that is not https: or mailto:.
       subject: env.PUBLIC_ORIGIN?.trim() || (env.CONTACT_EMAIL?.trim() ? `mailto:${env.CONTACT_EMAIL.trim()}` : undefined),
-      background: (work) => ctx.waitUntil(work),
+      background: (work) => {
+        after.push(work);
+        ctx.waitUntil(work);
+      },
     });
+    ctx.waitUntil(
+      Promise.allSettled([answer])
+        .then(() => Promise.allSettled(after))
+        .then(() => sql.flush())
+        .catch((e: unknown) => console.error("nho-nha: write count failed", String(e))),
+    );
+    return answer;
   },
   // Every minute, if Cloudflare runs it: a backstop that makes sure the clock's alarm is set.
   scheduled(event, env, ctx) {
     ctx.waitUntil(clock(env).wake().catch((e: unknown) => console.error("nho-nha: wake failed", String(e))));
     const url = env.HEARTBEAT_URL?.trim();
+    // Reads only: nothing to count, so no flush.
     if (url && new Date(event.scheduledTime).getUTCMinutes() % 10 === 0) ctx.waitUntil(heartbeat(url, d1Sql(env.DB), event.scheduledTime));
   },
 } satisfies ExportedHandler<Env>;

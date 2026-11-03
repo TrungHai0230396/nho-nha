@@ -2,6 +2,7 @@
 // real migrations applied, so SQL mistakes show up in `pnpm test`, not in prod.
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import type { CountedSql } from "../budget";
 import type { Row, Sql } from "../sql";
 
 const MIGRATIONS = new URL("../../migrations/", import.meta.url);
@@ -23,6 +24,20 @@ export function memorySql(): Sql & { db: DatabaseSync } {
         db.exec("ROLLBACK");
         throw e;
       }
+    },
+  };
+}
+
+/** Rows SQLite has written since the database was opened: total_changes, D1's rows_written without the index entries. */
+export const changes = (sql: { db: DatabaseSync }) => (sql.db.prepare("SELECT total_changes() AS n").get() as { n: number }).n;
+
+/** The same database as worker/d1.ts hands it to the write budget: each batch with the rows it wrote. */
+export function countedSql(sql: Sql & { db: DatabaseSync }): CountedSql {
+  return {
+    async batch(stmts) {
+      const before = changes(sql);
+      const rows = await sql.batch(stmts);
+      return { rows, written: changes(sql) - before };
     },
   };
 }
