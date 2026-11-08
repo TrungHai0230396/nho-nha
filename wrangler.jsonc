@@ -36,6 +36,11 @@
   "observability": { "enabled": false },
   // Every minute, a backstop: pokes the clock (worker/clock.ts), which does the ringing.
   "triggers": { "crons": ["* * * * *"] },
+  // CPU per invocation: a request, the clock's alarm, the cron. Workers Paid (the account's plan
+  // since 8/11/2026) lets one run 30 s and bills CPU past 30 million ms a month, where the Free plan
+  // stopped it near 10 ms; Hải (3/11): every project stops itself as on Free. The heaviest of the 7
+  // days before was 16.5 ms; this leaves room for an alarm pushing to many phones at once.
+  "limits": { "cpu_ms": 500 },
   "vars": {
     // Google sign-in (worker/google.ts). The client id is public; its secret
     // is GOOGLE_CLIENT_SECRET, put on Cloudflare by scripts/google-secret.sh.
